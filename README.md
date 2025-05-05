@@ -9,6 +9,7 @@
 - [Key Features](#key-features)
 - [Python Version Compatibility](#python-version-compatibility)
 - [Project Structure](#project-structure)
+- [Code Architecture](#code-architecture)
 - [Quick Start](#quick-start)
 - [Using pyenv to Manage Python Versions](#using-pyenv-to-manage-python-versions)
 - [Configuration (.env)](#configuration-env)
@@ -51,15 +52,38 @@
 
 ```
 AvettaConfluenceDownloader/
-├── confluence_downloader.py   # Main script
-├── requirements.txt           # Python dependencies (pinned versions)
-├── README.md                  # Project documentation
-├── .gitignore                 # Git ignore rules
-├── .env.example               # Example environment config
+├── cli.py                # Handles all user interaction, argument parsing, and CLI entry point
+├── main.py               # Orchestrates the main workflow, delegates logic to modules
+├── config.py             # Handles environment/config loading and validation
+├── confluence_api.py     # All Confluence API interaction functions
+├── file_ops.py           # File/markdown operations, saving, and consolidation
+├── constants.py          # Default values, stub values, and user-facing messages
+├── requirements.txt      # Python dependencies (pinned versions)
+├── README.md             # Project documentation
+├── .gitignore            # Git ignore rules
+├── .env.example          # Example environment config
 ├── confluence_downloader.log  # Log file (created at runtime)
-├── .venv/                     # (Optional) Virtual environment
-└── ...                        # Output directories/files
+├── .venv/                # (Optional) Virtual environment
+└── ...                   # Output directories/files
 ```
+
+---
+
+## Code Architecture
+
+- **cli.py**: Handles all user interaction, argument parsing, and the CLI entry point. All prompts, printing, and user-facing output are centralized here.
+- **main.py**: Orchestrates the main workflow, delegates logic to modules, and returns results for the CLI to handle output. No user interaction or printing occurs here.
+- **config.py**: Handles environment variable and user config loading and validation. Provides helpers for prompting and retrieving configuration values.
+- **file_ops.py**: Handles all file and markdown operations, including filename sanitization, unique filename generation, and markdown consolidation. No user interaction or printing occurs here.
+- **confluence_api.py**: Handles all Confluence API interactions, including page search, retrieval, and ID extraction. No user interaction or printing occurs here.
+- **constants.py**: Holds all default values, stub values, and user-facing messages. Centralizes configuration and strings for maintainability.
+
+**Entry Point:**
+- Run the script using:
+  ```sh
+  python cli.py
+  ```
+  or, for advanced usage, import and call `main()` from `main.py` in your own scripts.
 
 ---
 
@@ -83,7 +107,7 @@ AvettaConfluenceDownloader/
    ```
 5. **Run the script:**
    ```sh
-   python confluence_downloader.py
+   python cli.py
    ```
 
 ---
@@ -143,11 +167,11 @@ source .venv/bin/activate
 
 - **Interactive mode:**
   ```sh
-  python confluence_downloader.py
+  python cli.py
   ```
 - **With command-line arguments:**
   ```sh
-  python confluence_downloader.py --base-url https://your-domain.atlassian.net/wiki \
+  python cli.py --base-url https://your-domain.atlassian.net/wiki \
       --username your.email@example.com \
       --mode 1 \
       --space-key DEV \
@@ -155,15 +179,15 @@ source .venv/bin/activate
   ```
 - **Dry run (simulate, no files written):**
   ```sh
-  python confluence_downloader.py --dry-run
+  python cli.py --dry-run
   ```
 - **Verbose logging:**
   ```sh
-  python confluence_downloader.py --verbose
+  python cli.py --verbose
   ```
 - **Show version:**
   ```sh
-  python confluence_downloader.py --version
+  python cli.py --version
   ```
 
 **Tip:** You can mix command-line arguments, `.env`, and interactive prompts. Any argument not provided will be loaded from `.env` or prompted for interactively.
@@ -171,7 +195,7 @@ source .venv/bin/activate
 #### Available Arguments
 - `--base-url`         : Confluence base URL
 - `--username`         : Confluence username/email
-- `--mode`             : 1 (entire space), 2 (by parent page), or 3 (search by title)
+- `--mode`             : 1 (entire space), 2 (by parent page)
 - `--output-dir`       : Output directory for downloaded files
 - `--metrics-only`     : Only generate a metrics report (no page downloads)
 - `--parent-url`       : Parent page URL (for mode 2)
@@ -183,7 +207,7 @@ source .venv/bin/activate
 ### Running from an IDE (e.g., PyCharm, VSCode)
 
 1. Open the project folder in your IDE.
-2. Open `confluence_downloader.py`.
+2. Open `cli.py`.
 3. Click the Run/Debug button, or right-click the file and select "Run".
 4. To pass arguments, configure the run configuration (usually via a menu or toolbar in your IDE).
 

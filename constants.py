@@ -1,9 +1,19 @@
+import enum
+
 """
 constants.py
 ------------
 Holds all default values, stub values, and user-facing messages for the Confluence Downloader project.
 Centralizes configuration and strings for maintainability.
 """
+
+class Mode(enum.Enum):
+    """
+    Enum for supported download modes.
+    """
+    ENTIRE_SPACE = '1'
+    BY_PARENT_PAGE = '2'
+
 DEFAULT_BASE_URL = "https://avetta.atlassian.net/wiki"
 STUB_EMAIL = "your.email@example.com"
 STUB_TOKEN = "your-api-token-here"
