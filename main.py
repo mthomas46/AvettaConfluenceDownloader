@@ -11,7 +11,7 @@ from config import get_env_or_prompt
 from confluence_api import (
     get_all_pages_in_space, get_descendants, search_pages_by_title, get_page_id_from_url
 )
-from file_ops import sanitize_filename, unique_filename, consolidate_markdown_files, save_page
+from file_ops import sanitize_filename, unique_filename, consolidate_markdown_files, save_page, build_page_filepath
 from constants import DEFAULT_BASE_URL, STUB_EMAIL, STUB_TOKEN, DEFAULT_OUTPUT_DIR, Mode
 import os
 
@@ -38,6 +38,7 @@ def main(args) -> dict:
         dict: Status, config, and message for CLI output.
     """
     dry_run = args.dry_run
+    # Gather configuration from CLI args, environment, or prompt
     base_url = args.base_url or get_env_or_prompt(
         'CONFLUENCE_BASE_URL',
         'Confluence base URL',
@@ -88,6 +89,7 @@ def main(args) -> dict:
                 'status': 'error',
                 'message': 'Could not extract page ID from parent URL.'
             }
+        # Fetch all descendant pages under the parent
         pages = get_descendants(base_url, auth, parent_id)
         if not pages:
             return {
@@ -96,40 +98,37 @@ def main(args) -> dict:
                 'message': 'No pages found under the specified parent page. Check permissions or the URL.'
             }
         parent_title = pages[0].get('title') if pages else None
-        # Write metrics report
         from file_ops import consolidate_markdown_files  # avoid circular import
         from datetime import datetime
         from file_ops import sanitize_filename
-        # Write metrics report (reuse or implement write_metrics_md if available)
+        # Write metrics report if available
         try:
             from confluence_downloader import write_metrics_md
         except ImportError:
             write_metrics_md = None
         if write_metrics_md:
             write_metrics_md(pages, output_dir, mode_enum.value, parent_title)
-        # Save pages as Markdown unless metrics_only or dry_run
-        if not args.metrics_only and not dry_run:
+        downloaded_files = []
+        # Save pages as Markdown unless metrics_only; collect filenames for reporting
+        if not args.metrics_only:
             for page in pages:
-                ok = save_page(
+                dir_path, filename, file_path = build_page_filepath(page, output_dir)
+                save_success = save_page(
                     page,
                     output_dir,
                     overwrite_mode=getattr(args, 'overwrite_mode', 'overwrite'),
                     dry_run=dry_run
                 )
-                if not ok:
+                if save_success:
+                    downloaded_files.append(file_path)
+                else:
+                    # Return error if any page fails to save
                     return {
                         'config': locals(),
                         'status': 'error',
                         'message': f'Error saving page "{page.get('title', 'Untitled')}".'
                     }
-        elif not args.metrics_only and dry_run:
-            for page in pages:
-                save_page(
-                    page,
-                    output_dir,
-                    overwrite_mode=getattr(args, 'overwrite_mode', 'overwrite'),
-                    dry_run=True
-                )
+        # Return summary, config, and file list for CLI to display
         return {
             'config': {
                 'base_url': base_url,
@@ -140,11 +139,24 @@ def main(args) -> dict:
                 'metrics_only': args.metrics_only,
                 'dry_run': dry_run,
                 'verbose': args.verbose,
+                'overwrite_mode': getattr(args, 'overwrite_mode', 'overwrite'),
+                'parent_url': parent_url,
             },
             'status': 'ok',
-            'message': f"Downloaded and saved {len(pages)} pages under parent '{parent_title}'. Metrics written to {output_dir}/metrics.md."
+            'message': f"Downloaded and saved {len(downloaded_files)} pages under parent '{parent_title}'. Metrics written to {output_dir}/metrics.md.",
+            'downloaded_files': downloaded_files,
+            'selected_options': {
+                'mode': mode_enum.value,
+                'parent_url': parent_url,
+                'dry_run': dry_run,
+                'overwrite_mode': getattr(args, 'overwrite_mode', 'overwrite'),
+                'metrics_only': args.metrics_only,
+                'output_dir': output_dir,
+                'verbose': args.verbose,
+            }
         }
     else:
+        # Only mode 2 (by parent) is implemented in this workflow
         return {
             'config': {
                 'base_url': base_url,

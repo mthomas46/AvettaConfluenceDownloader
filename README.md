@@ -16,6 +16,7 @@
 - [Usage](#usage)
   - [Running from the Terminal](#running-from-the-terminal)
   - [Running from an IDE](#running-from-an-ide-eg-pycharm-vscode)
+- [CLI Options](#cli-options)
 - [Output](#output)
 - [Example Workflows](#example-workflows)
 - [API Usage](#api-usage)
@@ -30,8 +31,11 @@
 **Avetta Confluence Downloader** downloads Confluence pages as Markdown files and generates a metrics report. It supports both command-line and interactive usage, making it ideal for archiving, documentation, or analysis of Confluence content.
 
 ## Key Features
-- **Modern Progress Bar:** Uses [tqdm](https://tqdm.github.io/) for a robust progress bar.
+- **Modern, Colorful CLI:** User prompts are colorized and clearly separated for a better terminal experience.
+- **Interactive Flow:** The script guides you through all required options, shows a summary, and asks for confirmation before running.
 - **Flexible Configuration:** Supports `.env`, command-line arguments, and interactive prompts.
+- **Dry Run Mode:** Preview all actions (including overwrite logic) without writing any files.
+- **Overwrite Options:** Choose to overwrite, skip, increment, or decide for each file interactively.
 - **API Token Security:** API token is masked in all output/logs, and a warning is shown if passed as a CLI argument.
 - **Graceful Interrupts:** Cleanly handles `Ctrl+C` (KeyboardInterrupt).
 - **Concurrent Downloads:** Fast downloads with a thread pool (default: 10 threads).
@@ -64,6 +68,7 @@ AvettaConfluenceDownloader/
 ├── .env.example          # Example environment config
 ├── confluence_downloader.log  # Log file (created at runtime)
 ├── .venv/                # (Optional) Virtual environment
+├── tests/                # (Recommended) Unit tests for the codebase
 └── ...                   # Output directories/files
 ```
 
@@ -71,10 +76,10 @@ AvettaConfluenceDownloader/
 
 ## Code Architecture
 
-- **cli.py**: Handles all user interaction, argument parsing, and the CLI entry point. All prompts, printing, and user-facing output are centralized here.
+- **cli.py**: Handles all user interaction, argument parsing, and the CLI entry point. All prompts, printing, and user-facing output are centralized here. Prompts are colorized and separated for clarity.
 - **main.py**: Orchestrates the main workflow, delegates logic to modules, and returns results for the CLI to handle output. No user interaction or printing occurs here.
 - **config.py**: Handles environment variable and user config loading and validation. Provides helpers for prompting and retrieving configuration values.
-- **file_ops.py**: Handles all file and markdown operations, including filename sanitization, unique filename generation, and markdown consolidation. No user interaction or printing occurs here.
+- **file_ops.py**: Handles all file and markdown operations, including filename sanitization, unique filename generation, markdown consolidation, and file path construction (via a utility function). No user interaction or printing occurs here.
 - **confluence_api.py**: Handles all Confluence API interactions, including page search, retrieval, and ID extraction. No user interaction or printing occurs here.
 - **constants.py**: Holds all default values, stub values, and user-facing messages. Centralizes configuration and strings for maintainability.
 
@@ -109,107 +114,27 @@ AvettaConfluenceDownloader/
    ```sh
    python cli.py
    ```
+   - If you do not provide all required options as arguments or in your `.env`, the script will prompt you interactively with colorized prompts.
 
 ---
 
-## Using pyenv to Manage Python Versions
+## CLI Options
 
-If your system Python is not 3.12 or 3.11, or you want to manage multiple Python versions, use [pyenv](https://github.com/pyenv/pyenv):
+| Option           | Description                                              | Example/Values                        |
+|------------------|----------------------------------------------------------|---------------------------------------|
+| --base-url       | Confluence base URL                                      | https://your-domain.atlassian.net/wiki|
+| --username       | Confluence username/email                                | your.email@example.com                |
+| --mode           | Download mode                                            | 1 (entire space), 2 (by parent page)  |
+| --output-dir     | Output directory for downloaded files                    | ./confluence_pages                    |
+| --metrics-only   | Only generate metrics report (no page downloads)         | (flag)                                |
+| --parent-url     | Parent page URL (for mode 2)                             | https://.../pages/123456789/...       |
+| --space-key      | Space key (for mode 1)                                   | DEV                                   |
+| --dry-run        | Preview actions without writing files                    | (flag)                                |
+| --version        | Show script version and exit                             | (flag)                                |
+| --verbose        | Enable verbose (DEBUG) logging                           | (flag)                                |
 
-**Install pyenv:**
-- On macOS:
-  ```sh
-  brew install pyenv
-  ```
-- On Ubuntu/Debian:
-  ```sh
-  curl https://pyenv.run | bash
-  # Follow the printed instructions to add pyenv to your shell profile
-  ```
-
-**Install Python 3.12:**
-```sh
-pyenv install 3.12.3
-```
-
-**Set Python 3.12 for your project directory:**
-```sh
-pyenv local 3.12.3
-```
-This creates a `.python-version` file in your project folder.
-
-**Create and activate a virtual environment:**
-```sh
-python -m venv .venv
-source .venv/bin/activate
-```
-
-**Install requirements and run the script as usual.**
-
----
-
-## Configuration (.env)
-
-- Use the provided `.env.example` as a template.
-- Fill in:
-  - `CONFLUENCE_BASE_URL` (e.g., `https://your-domain.atlassian.net/wiki`)
-  - `CONFLUENCE_USERNAME` (your email/username)
-  - `CONFLUENCE_API_TOKEN` (your API token)
-  - `OUTPUT_DIR` (output directory, e.g., `confluence_pages`)
-- The script loads values from `.env` automatically. Any missing or stub value will be prompted for interactively.
-- **Never commit your real `.env` file to version control!**
-
----
-
-## Usage
-
-### Running from the Terminal
-
-- **Interactive mode:**
-  ```sh
-  python cli.py
-  ```
-- **With command-line arguments:**
-  ```sh
-  python cli.py --base-url https://your-domain.atlassian.net/wiki \
-      --username your.email@example.com \
-      --mode 1 \
-      --space-key DEV \
-      --output-dir ./confluence_pages
-  ```
-- **Dry run (simulate, no files written):**
-  ```sh
-  python cli.py --dry-run
-  ```
-- **Verbose logging:**
-  ```sh
-  python cli.py --verbose
-  ```
-- **Show version:**
-  ```sh
-  python cli.py --version
-  ```
-
-**Tip:** You can mix command-line arguments, `.env`, and interactive prompts. Any argument not provided will be loaded from `.env` or prompted for interactively.
-
-#### Available Arguments
-- `--base-url`         : Confluence base URL
-- `--username`         : Confluence username/email
-- `--mode`             : 1 (entire space), 2 (by parent page)
-- `--output-dir`       : Output directory for downloaded files
-- `--metrics-only`     : Only generate a metrics report (no page downloads)
-- `--parent-url`       : Parent page URL (for mode 2)
-- `--space-key`        : Space key (for mode 1)
-- `--dry-run`          : Preview actions without writing files
-- `--version`          : Show script version and exit
-- `--verbose`          : Enable verbose (DEBUG) logging
-
-### Running from an IDE (e.g., PyCharm, VSCode)
-
-1. Open the project folder in your IDE.
-2. Open `cli.py`.
-3. Click the Run/Debug button, or right-click the file and select "Run".
-4. To pass arguments, configure the run configuration (usually via a menu or toolbar in your IDE).
+- Any option not provided will be prompted for interactively, with colorized and clear prompts.
+- After all options are collected, a summary is shown and you must confirm before the script runs.
 
 ---
 
@@ -219,23 +144,37 @@ source .venv/bin/activate
 - Optionally, you can consolidate all markdown files into a single document (`Consolidated.md`).
 - Logs are written to `confluence_downloader.log` for troubleshooting and auditing.
 - Progress is shown with a modern progress bar (tqdm).
+- **Dry run mode** prints all actions that would be taken, including overwrite logic, without writing any files.
+- **At the end of the run, the CLI displays a summary of selected options and a list of all files that were downloaded (or would be downloaded in dry run mode).**
 
 ---
 
 ## Example Workflows
 
-- **Download all pages in a space:**
+- **Download all pages under a parent page (interactive):**
   ```sh
-  python confluence_downloader.py --mode 1 --space-key DEV
+  python cli.py
   ```
-- **Download all pages under a parent page:**
+  (Follow the prompts for mode, parent URL, dry run, and overwrite options.)
+
+- **Download all pages under a parent page (non-interactive):**
   ```sh
-  python confluence_downloader.py --mode 2 --parent-url "https://your-domain.atlassian.net/wiki/spaces/IT/pages/123456789/Parent+Page"
+  python cli.py --mode 2 --parent-url "https://your-domain.atlassian.net/wiki/spaces/IT/pages/123456789/Parent+Page" --output-dir ./confluence_pages
   ```
-- **Search and download by page title:**
+
+- **Dry run (simulate, no files written):**
   ```sh
-  python confluence_downloader.py --mode 3
-  # Then follow the interactive prompts to select pages
+  python cli.py --dry-run
+  ```
+
+- **Verbose logging:**
+  ```sh
+  python cli.py --verbose
+  ```
+
+- **Show version:**
+  ```sh
+  python cli.py --version
   ```
 
 ---
@@ -263,6 +202,7 @@ This script interacts with the [Confluence Cloud REST API](https://developer.atl
 
 - **Issues & PRs:** Please use GitHub Issues for bugs/feature requests and submit Pull Requests for improvements.
 - **Code Style:** Follow [PEP8](https://peps.python.org/pep-0008/) for Python code. Use meaningful commit messages. The codebase is compatible with [black](https://black.readthedocs.io/) and [flake8](https://flake8.pycqa.org/).
+- **Readability:** The codebase uses descriptive variable names (no single-letter placeholders), clear function-level docstrings, and inline comments to maximize human readability and maintainability.
 - **Type Hints:** Functions should use Python type hints for clarity and editor support.
 - **Testing:**
   - To add tests, create a `tests/` directory and use [pytest](https://docs.pytest.org/).

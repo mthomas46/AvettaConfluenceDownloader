@@ -7,6 +7,8 @@ All prompts, printing, and user-facing output are centralized here.
 from main import main
 from constants import BATCH_PROMPT, USER_PROMPT_OVERWRITE, Mode
 from argparse import ArgumentParser
+import sys
+from colorama import Fore, Style
 
 def get_args():
     """
@@ -53,31 +55,32 @@ def prompt_with_validation(prompt: str, valid_options=None, default=None, allow_
 
 def run():
     """
-    Run the CLI: parse arguments, invoke main workflow, and print results.
+    Main CLI flow: prompts the user for all required options, shows a summary, and displays results.
+    Handles all user interaction and output for the Confluence Downloader.
     """
     args = get_args()
 
     # Prompt for mode if not provided
     if not args.mode:
-        print("\n=== Download Mode Selection ===\n")
+        print(f"{Fore.CYAN}\n=== Download Mode Selection ===\n{Style.RESET_ALL}")
         args.mode = prompt_with_validation(
-            "Select download mode:\n  1. Download entire space\n  2. Download by parent page\n\nEnter 1 or 2",
+            f"{Fore.YELLOW}Select download mode:\n  1. Download entire space\n  2. Download by parent page\n\nEnter 1 or 2{Style.RESET_ALL}",
             valid_options=['1', '2'],
             default='2'
         )
 
     # Prompt for parent URL if mode 2 and not provided
     if args.mode == '2' and not args.parent_url:
-        print("\n=== Parent Page Selection ===\n")
+        print(f"{Fore.CYAN}\n=== Parent Page Selection ===\n{Style.RESET_ALL}")
         default_parent_url = "https://avetta.atlassian.net/wiki/spaces/it/pages/1122336779"
-        entered_url = input(f"Enter parent page URL\n[default: {default_parent_url}]: ").strip()
+        entered_url = input(f"{Fore.YELLOW}Enter parent page URL\n[default: {default_parent_url}]: {Style.RESET_ALL}").strip()
         args.parent_url = entered_url or default_parent_url
 
     # Prompt for dry run if not set via CLI
     if args.dry_run is None:
-        print("\n=== Dry Run Option ===\n")
+        print(f"{Fore.CYAN}\n=== Dry Run Option ===\n{Style.RESET_ALL}")
         dry_run_input = prompt_with_validation(
-            "Run in dry run mode? (no files will be written) (y/n)",
+            f"{Fore.YELLOW}Run in dry run mode? (no files will be written) (y/n){Style.RESET_ALL}",
             valid_options=['y', 'n'],
             default='n'
         )
@@ -85,9 +88,9 @@ def run():
 
     # Prompt for overwrite options if not dry-run or metrics-only
     if not args.dry_run and not args.metrics_only:
-        print("\n=== Overwrite Options ===\n")
+        print(f"{Fore.CYAN}\n=== Overwrite Options ===\n{Style.RESET_ALL}")
         overwrite_choice = prompt_with_validation(
-            BATCH_PROMPT + "\nEnter 1, 2, 3, or 4",
+            f"{Fore.YELLOW}{BATCH_PROMPT}\nEnter 1, 2, 3, or 4{Style.RESET_ALL}",
             valid_options=['1', '2', '3', '4'],
             default='1'
         )
@@ -97,14 +100,44 @@ def run():
     else:
         args.overwrite_mode = 'overwrite'
 
-    print("\n=== Starting Download Process ===\n")
+    # Print summary and confirm
+    print(f"{Fore.CYAN}\n=== Summary of Selected Options ==={Style.RESET_ALL}")
+    print(f"  Mode: {args.mode}")
+    if args.mode == '2':
+        print(f"  Parent URL: {args.parent_url}")
+    print(f"  Dry Run: {args.dry_run}")
+    print(f"  Overwrite Mode: {args.overwrite_mode}")
+    print(f"  Metrics Only: {args.metrics_only}")
+    print(f"  Output Directory: {args.output_dir or 'confluence_pages'}")
+    print(f"  Verbose: {args.verbose}")
+    confirm = input(f"{Fore.YELLOW}\nProceed with these settings? (y/n) [default: y]: {Style.RESET_ALL}").strip().lower() or 'y'
+    if confirm != 'y':
+        print(f"{Fore.RED}Aborted by user.{Style.RESET_ALL}")
+        sys.exit(0)
+
+    print(f"{Fore.CYAN}\n=== Starting Download Process ===\n{Style.RESET_ALL}")
     result = main(args)
     # Print config summary
     print("\nConfiguration:")
-    for k, v in result['config'].items():
-        print(f"  {k}: {v}")
+    for option_name, option_value in result['config'].items():
+        print(f"  {option_name}: {option_value}")
     print(f"\nStatus: {result['status']}")
     print(result['message'])
+
+    # Print selected options
+    if 'selected_options' in result:
+        print(f"\n{Fore.CYAN}=== Selected Options ==={Style.RESET_ALL}")
+        for option_name, option_value in result['selected_options'].items():
+            print(f"  {option_name}: {option_value}")
+
+    # Print downloaded files
+    if 'downloaded_files' in result:
+        print(f"\n{Fore.CYAN}=== Downloaded Files ==={Style.RESET_ALL}")
+        if result['downloaded_files']:
+            for file_path in result['downloaded_files']:
+                print(f"  {file_path}")
+        else:
+            print("  (No files were downloaded.)")
 
 if __name__ == "__main__":
     run() 
