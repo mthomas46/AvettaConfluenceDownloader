@@ -22,7 +22,7 @@ def get_args():
     parser.add_argument('--metrics-only', action='store_true', help='Only generate metrics report (no page downloads)')
     parser.add_argument('--parent-url', help='Parent page URL (for mode 2)')
     parser.add_argument('--space-key', help='Space key (for mode 1)')
-    parser.add_argument('--dry-run', action='store_true', help='Preview actions without writing files')
+    parser.add_argument('--dry-run', action='store_true', default=None, help='Preview actions without writing files')
     parser.add_argument('--version', action='version', version='%(prog)s 1.0.0', help='Show version and exit')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose (DEBUG) logging')
     return parser.parse_args()
@@ -56,18 +56,48 @@ def run():
     Run the CLI: parse arguments, invoke main workflow, and print results.
     """
     args = get_args()
+
     # Prompt for mode if not provided
     if not args.mode:
+        print("\n=== Download Mode Selection ===\n")
         args.mode = prompt_with_validation(
-            "Select download mode:\n  1. Download entire space\n  2. Download by parent page\nEnter 1 or 2",
+            "Select download mode:\n  1. Download entire space\n  2. Download by parent page\n\nEnter 1 or 2",
             valid_options=['1', '2'],
             default='2'
         )
+
     # Prompt for parent URL if mode 2 and not provided
     if args.mode == '2' and not args.parent_url:
+        print("\n=== Parent Page Selection ===\n")
         default_parent_url = "https://avetta.atlassian.net/wiki/spaces/it/pages/1122336779"
-        entered_url = input(f"Enter parent page URL [default: {default_parent_url}]: ").strip()
+        entered_url = input(f"Enter parent page URL\n[default: {default_parent_url}]: ").strip()
         args.parent_url = entered_url or default_parent_url
+
+    # Prompt for dry run if not set via CLI
+    if args.dry_run is None:
+        print("\n=== Dry Run Option ===\n")
+        dry_run_input = prompt_with_validation(
+            "Run in dry run mode? (no files will be written) (y/n)",
+            valid_options=['y', 'n'],
+            default='n'
+        )
+        args.dry_run = (dry_run_input == 'y')
+
+    # Prompt for overwrite options if not dry-run or metrics-only
+    if not args.dry_run and not args.metrics_only:
+        print("\n=== Overwrite Options ===\n")
+        overwrite_choice = prompt_with_validation(
+            BATCH_PROMPT + "\nEnter 1, 2, 3, or 4",
+            valid_options=['1', '2', '3', '4'],
+            default='1'
+        )
+        # Map user choice to a string for main()
+        overwrite_map = {'1': 'overwrite', '2': 'skip', '3': 'ask', '4': 'increment'}
+        args.overwrite_mode = overwrite_map[overwrite_choice]
+    else:
+        args.overwrite_mode = 'overwrite'
+
+    print("\n=== Starting Download Process ===\n")
     result = main(args)
     # Print config summary
     print("\nConfiguration:")

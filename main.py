@@ -11,7 +11,7 @@ from config import get_env_or_prompt
 from confluence_api import (
     get_all_pages_in_space, get_descendants, search_pages_by_title, get_page_id_from_url
 )
-from file_ops import sanitize_filename, unique_filename, consolidate_markdown_files
+from file_ops import sanitize_filename, unique_filename, consolidate_markdown_files, save_page
 from constants import DEFAULT_BASE_URL, STUB_EMAIL, STUB_TOKEN, DEFAULT_OUTPUT_DIR, Mode
 import os
 
@@ -110,25 +110,26 @@ def main(args) -> dict:
         # Save pages as Markdown unless metrics_only or dry_run
         if not args.metrics_only and not dry_run:
             for page in pages:
-                title = page.get('title', 'Untitled')
-                ancestors = page.get('ancestors', [])
-                path_parts = [sanitize_filename(a.get('title', '')) for a in ancestors if a.get('title')]
-                dir_path = os.path.join(output_dir, *path_parts) if path_parts else output_dir
-                filename = sanitize_filename(title) + ".md"
-                filepath = os.path.join(dir_path, filename)
-                os.makedirs(dir_path, exist_ok=True)
-                storage_val = page.get('body', {}).get('storage', {}).get('value', '')
-                from file_ops import confluence_storage_to_markdown
-                markdown = confluence_storage_to_markdown(storage_val)
-                try:
-                    with open(filepath, "w", encoding="utf-8") as f:
-                        f.write(markdown)
-                except Exception as e:
+                ok = save_page(
+                    page,
+                    output_dir,
+                    overwrite_mode=getattr(args, 'overwrite_mode', 'overwrite'),
+                    dry_run=dry_run
+                )
+                if not ok:
                     return {
                         'config': locals(),
                         'status': 'error',
-                        'message': f'Error saving page "{title}": {e}'
+                        'message': f'Error saving page "{page.get('title', 'Untitled')}".'
                     }
+        elif not args.metrics_only and dry_run:
+            for page in pages:
+                save_page(
+                    page,
+                    output_dir,
+                    overwrite_mode=getattr(args, 'overwrite_mode', 'overwrite'),
+                    dry_run=True
+                )
         return {
             'config': {
                 'base_url': base_url,

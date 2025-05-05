@@ -90,4 +90,62 @@ def confluence_storage_to_markdown(storage_html: str) -> str:
         return ''.join([handle_node(child) for child in node.children])
     for elem in soup.body or soup.children:
         lines.append(handle_node(elem))
-    return ''.join(lines).strip() 
+    return ''.join(lines).strip()
+
+def save_page(page: dict, output_dir: str, overwrite_mode: str = 'overwrite', dry_run: bool = False) -> bool:
+    """
+    Save a single page as a Markdown file, preserving Confluence hierarchy in the directory structure.
+    Supports overwrite modes: 'overwrite', 'skip', 'ask', 'increment'.
+    If dry_run is True, print what would be done instead of writing the file.
+    Returns True if saved or skipped, False on error.
+    """
+    import sys
+    title = page.get('title', 'Untitled')
+    ancestors = page.get('ancestors', [])
+    path_parts = [sanitize_filename(a.get('title', '')) for a in ancestors if a.get('title')]
+    dir_path = os.path.join(output_dir, *path_parts) if path_parts else output_dir
+    filename = sanitize_filename(title) + ".md"
+    filepath = os.path.join(dir_path, filename)
+
+    def prompt_overwrite(path):
+        resp = input(f"File '{path}' exists. Overwrite? (y/n/i=increment) [default: y]: ").strip().lower() or 'y'
+        if resp == 'i':
+            return 'increment'
+        elif resp == 'y':
+            return 'overwrite'
+        else:
+            return 'skip'
+
+    # Overwrite logic
+    if os.path.exists(filepath):
+        if overwrite_mode == 'skip':
+            if dry_run:
+                print(f"[DRY RUN] Would skip existing file: {filepath}")
+            return True  # skip saving
+        elif overwrite_mode == 'increment':
+            filename = unique_filename(filename, output_dir, dir_path)
+            filepath = os.path.join(dir_path, filename)
+        elif overwrite_mode == 'ask':
+            action = prompt_overwrite(filepath)
+            if action == 'skip':
+                if dry_run:
+                    print(f"[DRY RUN] Would skip existing file: {filepath}")
+                return True
+            elif action == 'increment':
+                filename = unique_filename(filename, output_dir, dir_path)
+                filepath = os.path.join(dir_path, filename)
+            # else: overwrite
+        # else: overwrite (default)
+    if dry_run:
+        print(f"[DRY RUN] Would save: {filepath}")
+        return True
+    try:
+        os.makedirs(dir_path, exist_ok=True)
+        storage_val = page.get('body', {}).get('storage', {}).get('value', '')
+        markdown = confluence_storage_to_markdown(storage_val)
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(markdown)
+        return True
+    except Exception as e:
+        print(f"Error saving page '{title}': {e}", file=sys.stderr)
+        return False 
