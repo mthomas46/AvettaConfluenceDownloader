@@ -16,4 +16,10 @@ ENV/
 .idea/
 *.iml
 .vscode/
-.DS_Store 
+.DS_Store
+
+# Environment variables
+.env
+
+# Confluence pages
+confluence_pages/ 

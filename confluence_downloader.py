@@ -14,6 +14,20 @@ import getpass
 from bs4 import BeautifulSoup
 from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dotenv import load_dotenv
+from tqdm import tqdm
+import sys
+
+if not (sys.version_info.major == 3 and sys.version_info.minor in (11, 12)):
+    print("""
+WARNING: This script is tested and supported only on Python 3.11 and 3.12.
+Some dependencies (e.g., lxml) may not work on Python 3.13+ or older versions.
+Please use Python 3.12 or 3.11 for best compatibility.
+""")
+    sys.exit(1)
+
+# Load .env file if present
+load_dotenv()
 
 # === Colorama Setup ===
 try:
@@ -25,6 +39,8 @@ except ImportError:
     Fore = Style = Dummy()
 
 # === Argument Parsing ===
+__version__ = "1.0.0"
+
 def get_args():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="Confluence Downloader")
@@ -36,6 +52,8 @@ def get_args():
     parser.add_argument('--parent-url', help='Parent page URL (for mode 2)')
     parser.add_argument('--space-key', help='Space key (for mode 1)')
     parser.add_argument('--dry-run', action='store_true', help='Dry run mode')
+    parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}', help='Show version and exit')
+    parser.add_argument('--verbose', action='store_true', help='Enable verbose (DEBUG) logging')
     return parser.parse_args()
 
 # === Interactive Credential Prompt ===
@@ -248,13 +266,12 @@ def save_page(page, output_dir, overwrite_mode="overwrite"):
     path_parts = [sanitize_filename(a.get('title', '')) for a in ancestors if a.get('title')]
     dir_path = os.path.join(output_dir, *path_parts) if path_parts else output_dir
     filename = sanitize_filename(title) + ".md"
-    filename = unique_filename(filename, output_dir, dir_path)
     filepath = os.path.join(dir_path, filename)
+
     # Overwrite logic
     if os.path.exists(filepath):
-        # Interactive mode if overwrite_mode is a dict with 'mode' == 'ask'
         if isinstance(overwrite_mode, dict) and overwrite_mode.get('mode') == 'ask':
-            prompt = (f"File '{filepath}' exists. Overwrite? (y/n/a=all/s=skip all) [default: y]: ")
+            prompt = (f"File '{filepath}' exists. Overwrite? (y/n/a=all/s=skip all/i=increment all) [default: y]: ")
             resp = input(prompt).strip().lower() or 'y'
             if resp == 'a':
                 overwrite_mode['mode'] = 'all'
@@ -262,16 +279,29 @@ def save_page(page, output_dir, overwrite_mode="overwrite"):
             elif resp == 's':
                 overwrite_mode['mode'] = 'skip'
                 logging.info("User selected 'skip all' for file conflicts.")
+            elif resp == 'i':
+                overwrite_mode['mode'] = 'increment'
+                logging.info("User selected 'increment all' for file conflicts.")
             elif resp != 'y':
+                # User chose not to overwrite, so generate a unique filename
+                filename = unique_filename(filename, output_dir, dir_path)
+                filepath = os.path.join(dir_path, filename)
                 print(f"{Fore.YELLOW}Skipped: {filepath}{Style.RESET_ALL}")
                 logging.info(f"User skipped overwriting file: {filepath}")
                 return True
         if (isinstance(overwrite_mode, dict) and overwrite_mode.get('mode') == 'skip'):
+            filename = unique_filename(filename, output_dir, dir_path)
+            filepath = os.path.join(dir_path, filename)
             print(f"{Fore.YELLOW}Skipped: {filepath}{Style.RESET_ALL}")
             logging.info(f"User skipped overwriting file: {filepath}")
             return True
-        # If mode is 'all', always overwrite
+        if (isinstance(overwrite_mode, dict) and overwrite_mode.get('mode') == 'increment'):
+            filename = unique_filename(filename, output_dir, dir_path)
+            filepath = os.path.join(dir_path, filename)
+            # Proceed to save with incremented filename
+        # If mode is 'all', always overwrite (do nothing, just overwrite filepath)
         # If overwrite_mode is not a dict (e.g. 'overwrite'), always overwrite
+
     try:
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
         logging.info(f"Attempting to save page '{title}' to '{filepath}'")
@@ -288,9 +318,26 @@ def save_page(page, output_dir, overwrite_mode="overwrite"):
         logging.error(f"Failed to save page '{title}': {e}")
         return False
 
+def prompt_with_validation(prompt: str, valid_options=None, default=None, allow_blank=False) -> str:
+    """
+    Prompt the user for input, validate against valid_options, and handle defaults.
+    """
+    while True:
+        if default is not None:
+            user_input = input(f"{prompt} [default: {default}]: ").strip()
+            if not user_input:
+                user_input = default
+        else:
+            user_input = input(f"{prompt}: ").strip()
+        if allow_blank and user_input == '':
+            return user_input
+        if valid_options is None or user_input in valid_options:
+            return user_input
+        print(f"{Fore.RED}Invalid selection. Please enter one of: {', '.join(valid_options)}{Style.RESET_ALL}")
+
 # === Download and Progress ===
 def download_pages_concurrent(pages, output_dir, dry_run=False):
-    """Download pages concurrently with progress bar and dry run support."""
+    """Download pages concurrently with tqdm progress bar and dry run support."""
     if not pages:
         print(f"{Fore.YELLOW}No pages to download.{Style.RESET_ALL}")
         logging.warning("No pages to download.")
@@ -298,8 +345,6 @@ def download_pages_concurrent(pages, output_dir, dry_run=False):
     failed = []
     total = len(pages)
     print(f"\nStarting download of {total} pages...")
-    completed = 0
-    bar_length = 40
     existing_files = set()
     for root, _, files in os.walk(output_dir):
         for f in files:
@@ -317,48 +362,34 @@ def download_pages_concurrent(pages, output_dir, dry_run=False):
         if os.path.exists(filepath):
             files_to_overwrite.append(filepath)
 
-    # Batch overwrite/skip prompt
+    # Batch overwrite/skip/increment prompt
     if files_to_overwrite and not dry_run:
         print(f"{Fore.YELLOW}Warning: {len(files_to_overwrite)} files would be overwritten in {output_dir}.{Style.RESET_ALL}")
         print("First 5:")
         for fp in files_to_overwrite[:5]:
             print(f"  - {fp}")
         print("...") if len(files_to_overwrite) > 5 else None
-        while True:
-            print("\nWhat would you like to do when existing files are found?")
-            print("  1. Overwrite all existing files (recommended for most cases).\n")
-            print("  2. Skip all existing files.\n")
-            print("  3. Decide for each file interactively.\n")
-            batch_mode = input("Enter 1 for overwrite all, 2 for skip all, or 3 for interactive [default: 1]: ").strip() or '1'
-            if batch_mode in {'1', '2', '3'}:
-                break
-            print(f"{Fore.RED}Invalid selection. Please enter 1, 2, or 3.{Style.RESET_ALL}")
-        batch_mode = {'1': 'a', '2': 's', '3': 'i'}[batch_mode]
+        batch_mode = prompt_with_validation(
+            "\nWhat would you like to do when existing files are found?\n  1. Overwrite all existing files (recommended for most cases).\n  2. Skip all existing files.\n  3. Decide for each file interactively.\n  4. Increment all file names (never overwrite, always create new)",
+            valid_options={'1', '2', '3', '4'},
+            default='1'
+        )
+        batch_mode = {'1': 'a', '2': 's', '3': 'i', '4': 'increment'}[batch_mode]
     else:
         batch_mode = 'a'
-    overwrite_mode = {'mode': 'all' if batch_mode == 'a' else 'skip' if batch_mode == 's' else 'ask'}
-
-    def print_progress(completed, total):
-        percent = int((completed / total) * 100)
-        filled = int(bar_length * completed // total)
-        bar = '[' + '=' * filled + '-' * (bar_length - filled) + f'] {completed}/{total} ({percent}%)'
-        print(f"\r{bar}", end='', flush=True)
-        if completed == total:
-            print()
+    overwrite_mode = {'mode': 'all' if batch_mode == 'a' else 'skip' if batch_mode == 's' else 'ask' if batch_mode == 'i' else 'increment'}
 
     if dry_run:
-        for page in pages:
+        for page in tqdm(pages, desc="[DRY RUN] Would save"):
             title = page.get('title', 'Untitled')
             filename = sanitize_filename(title) + ".txt"
-            filename = unique_filename(filename, existing_files)
+            filename = unique_filename(filename, output_dir, dir_path)
             filepath = os.path.join(output_dir, filename)
             print(f"{Fore.BLUE}[DRY RUN]{Style.RESET_ALL} Would save: {Fore.GREEN}{filepath}{Style.RESET_ALL}")
-            completed += 1
-            print_progress(completed, total)
     else:
         with ThreadPoolExecutor(max_workers=10) as executor:
             futures = {executor.submit(save_page, page, output_dir, overwrite_mode): page for page in pages}
-            for future in as_completed(futures):
+            for future in tqdm(as_completed(futures), total=total, desc="Downloading pages"):
                 page = futures[future]
                 try:
                     if not future.result():
@@ -367,15 +398,13 @@ def download_pages_concurrent(pages, output_dir, dry_run=False):
                     print(f"\n{Fore.RED}Error downloading {page.get('title', 'Untitled')}: {e}{Style.RESET_ALL}")
                     logging.error(f"Download error for '{page.get('title', 'Untitled')}': {e}")
                     failed.append(page.get('title', 'Untitled'))
-                completed += 1
-                print_progress(completed, total)
         if failed:
             print(f"\n{Fore.RED}Failed to save {len(failed)} pages:{Style.RESET_ALL}")
             for title in failed:
                 print(f"  - {title}")
             logging.warning(f"Failed to save {len(failed)} pages: {failed}")
-    print(f"\n{Fore.GREEN}Download complete. {completed} pages processed, {len(failed)} errors.{Style.RESET_ALL}")
-    logging.info(f"Download complete. {completed} pages processed, {len(failed)} errors.")
+    print(f"\n{Fore.GREEN}Download complete. {total} pages processed, {len(failed)} errors.{Style.RESET_ALL}")
+    logging.info(f"Download complete. {total} pages processed, {len(failed)} errors.")
 
 # === Metrics Report ===
 def write_metrics_md(pages, output_dir, mode, parent_title=None):
@@ -437,11 +466,40 @@ def write_metrics_md(pages, output_dir, mode, parent_title=None):
         print(f"{Fore.RED}Error writing metrics file: {e}{Style.RESET_ALL}")
         logging.error(f"Error writing metrics file: {e}")
 
+def get_env_or_prompt(var, prompt, default=None, is_secret=False, stub_values=None):
+    """
+    Get a value from the environment or prompt the user if missing or stubbed.
+    stub_values: list of values that are considered placeholders and should trigger a prompt.
+    """
+    value = os.getenv(var)
+    if value is not None:
+        value = value.strip()
+    if not value or (stub_values and value in stub_values):
+        if is_secret:
+            value = getpass.getpass(f"{prompt}: ").strip()
+        else:
+            if default:
+                value = input(f"{prompt} [default: {default}]: ").strip() or default
+            else:
+                value = input(f"{prompt}: ").strip()
+    return value
+
+def mask_token(token):
+    if not token or len(token) < 8:
+        return '***'
+    return token[:2] + '*' * (len(token) - 6) + token[-4:]
+
 # === Main Script ===
 def main():
     """Main entry point for the script."""
     args = get_args()
-    print(f"{Fore.CYAN}\n==== Confluence Downloader ===={Style.RESET_ALL}")
+    # Set logging level
+    if args.verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
+        print(f"{Fore.YELLOW}Verbose logging enabled (DEBUG level).{Style.RESET_ALL}")
+    else:
+        logging.getLogger().setLevel(logging.INFO)
+    print(f"{Fore.CYAN}\n==== Confluence Downloader v{__version__} ===={Style.RESET_ALL}")
     dry_run = args.dry_run
     if not args.dry_run:
         print(f"{Fore.MAGENTA}Would you like to run in dry run mode? (Preview actions, no files will be written){Style.RESET_ALL}")
@@ -449,10 +507,45 @@ def main():
         if dry == 'y':
             dry_run = True
             print(f"{Fore.MAGENTA}Dry run mode enabled. No files will be written.{Style.RESET_ALL}")
-    base_url = args.base_url or input(f"Confluence base URL [default: https://avetta.atlassian.net/wiki]: ").strip().rstrip('/') or "https://avetta.atlassian.net/wiki"
-    username = args.username or input("Confluence username/email: ").strip()
-    api_token = getpass.getpass("Confluence API token: ").strip()
+
+    # Use .env values or prompt as needed
+    base_url = args.base_url or get_env_or_prompt(
+        'CONFLUENCE_BASE_URL',
+        'Confluence base URL',
+        default='https://avetta.atlassian.net/wiki',
+        stub_values=['https://your-domain.atlassian.net/wiki', '', None]
+    )
+    if not base_url.startswith("http://") and not base_url.startswith("https://"):
+        base_url = "https://" + base_url
+
+    username = args.username or get_env_or_prompt(
+        'CONFLUENCE_USERNAME',
+        'Confluence username/email',
+        stub_values=['your.email@example.com', '', None]
+    )
+    # Warn if API token is passed as a CLI argument (security)
+    api_token_cli = getattr(args, 'api_token', None)
+    api_token_env = os.getenv('CONFLUENCE_API_TOKEN')
+    api_token = get_env_or_prompt(
+        'CONFLUENCE_API_TOKEN',
+        'Confluence API token',
+        is_secret=True,
+        stub_values=['your-api-token-here', '', None]
+    )
+    if api_token_cli:
+        print(f"{Fore.RED}Warning: Passing API token as a command-line argument may expose it in process lists! Use .env or interactive prompt instead.{Style.RESET_ALL}")
     auth = (username, api_token)
+
+    # Print config summary (mask API token)
+    print(f"\n{Fore.CYAN}Configuration:{Style.RESET_ALL}")
+    print(f"  Base URL: {base_url}")
+    print(f"  Username: {username}")
+    print(f"  API Token: {mask_token(api_token)}")
+    print(f"  Output Dir: {args.output_dir or os.getenv('OUTPUT_DIR', 'confluence_pages')}")
+    print(f"  Mode: {args.mode or 'prompt'}")
+    print(f"  Metrics Only: {args.metrics_only}")
+    print(f"  Dry Run: {dry_run}")
+    print(f"  Verbose: {args.verbose}")
 
     # Page selection
     if args.mode:
@@ -469,7 +562,12 @@ def main():
             print(f"{Fore.RED}Invalid selection. Please enter 1, 2, or 3.{Style.RESET_ALL}")
             logging.warning(f"Invalid mode selection: {mode}")
 
-    output_dir = args.output_dir or input("Output directory [default: confluence_pages]: ").strip() or "confluence_pages"
+    output_dir = args.output_dir or get_env_or_prompt(
+        'OUTPUT_DIR',
+        'Output directory',
+        default='confluence_pages',
+        stub_values=['confluence_pages', '', None]
+    )
 
     print(f"\n{Fore.CYAN}---- Output Options ----{Style.RESET_ALL}")
     if args.metrics_only:
@@ -486,81 +584,86 @@ def main():
             print(f"{Fore.RED}Invalid selection. Please enter 1 or 2.{Style.RESET_ALL}")
             logging.warning(f"Invalid metrics_mode selection: {metrics_mode}")
 
-    if mode == '1':
-        print(f"\n{Fore.YELLOW}WARNING: Downloading an entire Confluence space may take a long time and generate a large number of files.{Style.RESET_ALL}")
-        confirm = input("Are you sure you want to proceed? (y/n) [default: n]: ").strip().lower() or 'n'
-        if confirm != 'y':
-            print(f"{Fore.CYAN}Aborted.{Style.RESET_ALL}")
-            logging.info("User aborted entire space download at confirmation.")
-            return
-        confirm2 = input("Really proceed? (y/n) [default: n]: ").strip().lower() or 'n'
-        if confirm2 != 'y':
-            print(f"{Fore.CYAN}Aborted.{Style.RESET_ALL}")
-            logging.info("User aborted entire space download at double confirmation.")
-            return
-        space_key = args.space_key or input("Enter space key (e.g. DEV): ").strip()
-        print(f"\n{Fore.CYAN}Fetching pages from space '{space_key}'...{Style.RESET_ALL}")
-        pages = get_all_pages_in_space(base_url, auth, space_key)
-        print(f"{Fore.CYAN}Found {len(pages)} pages in space '{space_key}'.{Style.RESET_ALL}")
-        write_metrics_md(pages, output_dir, mode)
-        if not metrics_only:
-            download_pages_concurrent(pages, output_dir, dry_run=dry_run)
-            # Optional: Consolidate markdown files
-            do_consolidate = input("\nWould you like to generate a consolidated Markdown file from all downloaded pages? (y/n) [default: n]: ").strip().lower() or 'n'
-            if do_consolidate == 'y':
-                consolidate_markdown_files(output_dir)
-        print(f"\n{Fore.GREEN}Summary: {len(pages)} pages processed. Metrics written to {output_dir}/metrics.md{Style.RESET_ALL}")
-    elif mode == '3':
-        search_term = input("Enter title search term: ").strip()
-        pages = search_pages_by_title(base_url, auth, search_term)
-        if not pages:
-            print(f"{Fore.RED}No pages found matching '{search_term}'.{Style.RESET_ALL}")
-            logging.info(f"No pages found for search term: {search_term}")
-            return
-        print(f"{Fore.CYAN}Found {len(pages)} matching pages:{Style.RESET_ALL}")
-        for idx, page in enumerate(pages, 1):
-            print(f"  {idx}. {page.get('title', 'Untitled')} (ID: {page.get('id')})")
-        while True:
-            selection = input("Enter comma-separated numbers to download (or 'all' for all, default: all): ").strip()
-            if not selection or selection.lower() == 'all':
-                selected_pages = pages
-                break
-            try:
-                indices = [int(i)-1 for i in selection.split(',') if i.strip().isdigit()]
-                if not indices or any(i < 0 or i >= len(pages) for i in indices):
-                    raise ValueError
-                selected_pages = [pages[i] for i in indices]
-                break
-            except Exception:
-                print(f"{Fore.RED}Invalid selection. Please enter valid numbers or 'all'.{Style.RESET_ALL}")
-                logging.warning(f"Invalid page selection: {selection}")
-        write_metrics_md(selected_pages, output_dir, mode)
-        if not metrics_only:
-            download_pages_concurrent(selected_pages, output_dir, dry_run=dry_run)
-        print(f"\n{Fore.GREEN}Summary: {len(selected_pages)} pages processed. Metrics written to {output_dir}/metrics.md{Style.RESET_ALL}")
-    else:
-        default_parent_url = "https://avetta.atlassian.net/wiki/spaces/it/pages/1122336779"
-        page_url = args.parent_url or input(f"Enter parent page URL [default: {default_parent_url}]: ").strip() or default_parent_url
-        page_id = get_page_id_from_url(page_url, base_url, auth)
-        if not page_id:
-            print(f"{Fore.RED}Could not extract pageId from URL. Please provide a valid Confluence page URL containing pageId.{Style.RESET_ALL}")
-            logging.error(f"Could not extract pageId from URL: {page_url}")
-            return
-        print(f"\n{Fore.CYAN}Fetching pages under parent page...{Style.RESET_ALL}")
-        pages = get_descendants(base_url, auth, page_id)
-        if not pages:
-            print(f"{Fore.RED}\nNo pages could be retrieved. This is usually due to insufficient permissions or a private page.\nPlease check your Confluence permissions, try a different parent page, or contact your Confluence administrator.{Style.RESET_ALL}")
-            logging.warning(f"No pages retrieved for parent page: {page_url}")
-            retry = input("Would you like to try a different parent page or credentials? (y/n) [default: n]: ").strip().lower() or 'n'
-            if retry == 'y':
-                print(f"{Fore.CYAN}Restart the script and try again with a different page or credentials.{Style.RESET_ALL}")
-            return
-        parent_title = pages[0].get('title') if pages else None
-        print(f"{Fore.CYAN}Found {len(pages)} pages under parent page.{Style.RESET_ALL}")
-        write_metrics_md(pages, output_dir, mode, parent_title)
-        if not metrics_only:
-            download_pages_concurrent(pages, output_dir, dry_run=dry_run)
-        print(f"\n{Fore.GREEN}Summary: {len(pages)} pages processed. Metrics written to {output_dir}/metrics.md{Style.RESET_ALL}")
+    try:
+        if mode == '1':
+            print(f"\n{Fore.YELLOW}WARNING: Downloading an entire Confluence space may take a long time and generate a large number of files.{Style.RESET_ALL}")
+            confirm = input("Are you sure you want to proceed? (y/n) [default: n]: ").strip().lower() or 'n'
+            if confirm != 'y':
+                print(f"{Fore.CYAN}Aborted.{Style.RESET_ALL}")
+                logging.info("User aborted entire space download at confirmation.")
+                return
+            confirm2 = input("Really proceed? (y/n) [default: n]: ").strip().lower() or 'n'
+            if confirm2 != 'y':
+                print(f"{Fore.CYAN}Aborted.{Style.RESET_ALL}")
+                logging.info("User aborted entire space download at double confirmation.")
+                return
+            space_key = args.space_key or input("Enter space key (e.g. DEV): ").strip()
+            print(f"\n{Fore.CYAN}Fetching pages from space '{space_key}'...{Style.RESET_ALL}")
+            pages = get_all_pages_in_space(base_url, auth, space_key)
+            print(f"{Fore.CYAN}Found {len(pages)} pages in space '{space_key}'.{Style.RESET_ALL}")
+            write_metrics_md(pages, output_dir, mode)
+            if not metrics_only:
+                download_pages_concurrent(pages, output_dir, dry_run=dry_run)
+                # Optional: Consolidate markdown files
+                do_consolidate = input("\nWould you like to generate a consolidated Markdown file from all downloaded pages? (y/n) [default: n]: ").strip().lower() or 'n'
+                if do_consolidate == 'y':
+                    consolidate_markdown_files(output_dir)
+            print(f"\n{Fore.GREEN}Summary: {len(pages)} pages processed. Metrics written to {output_dir}/metrics.md{Style.RESET_ALL}")
+        elif mode == '3':
+            search_term = input("Enter title search term: ").strip()
+            pages = search_pages_by_title(base_url, auth, search_term)
+            if not pages:
+                print(f"{Fore.RED}No pages found matching '{search_term}'.{Style.RESET_ALL}")
+                logging.info(f"No pages found for search term: {search_term}")
+                return
+            print(f"{Fore.CYAN}Found {len(pages)} matching pages:{Style.RESET_ALL}")
+            for idx, page in enumerate(pages, 1):
+                print(f"  {idx}. {page.get('title', 'Untitled')} (ID: {page.get('id')})")
+            while True:
+                selection = input("Enter comma-separated numbers to download (or 'all' for all, default: all): ").strip()
+                if not selection or selection.lower() == 'all':
+                    selected_pages = pages
+                    break
+                try:
+                    indices = [int(i)-1 for i in selection.split(',') if i.strip().isdigit()]
+                    if not indices or any(i < 0 or i >= len(pages) for i in indices):
+                        raise ValueError
+                    selected_pages = [pages[i] for i in indices]
+                    break
+                except Exception:
+                    print(f"{Fore.RED}Invalid selection. Please enter valid numbers or 'all'.{Style.RESET_ALL}")
+                    logging.warning(f"Invalid page selection: {selection}")
+            write_metrics_md(selected_pages, output_dir, mode)
+            if not metrics_only:
+                download_pages_concurrent(selected_pages, output_dir, dry_run=dry_run)
+            print(f"\n{Fore.GREEN}Summary: {len(selected_pages)} pages processed. Metrics written to {output_dir}/metrics.md{Style.RESET_ALL}")
+        else:
+            default_parent_url = "https://avetta.atlassian.net/wiki/spaces/it/pages/1122336779"
+            page_url = args.parent_url or input(f"Enter parent page URL [default: {default_parent_url}]: ").strip() or default_parent_url
+            page_id = get_page_id_from_url(page_url, base_url, auth)
+            if not page_id:
+                print(f"{Fore.RED}Could not extract pageId from URL. Please provide a valid Confluence page URL containing pageId.{Style.RESET_ALL}")
+                logging.error(f"Could not extract pageId from URL: {page_url}")
+                return
+            print(f"\n{Fore.CYAN}Fetching pages under parent page...{Style.RESET_ALL}")
+            pages = get_descendants(base_url, auth, page_id)
+            if not pages:
+                print(f"{Fore.RED}\nNo pages could be retrieved. This is usually due to insufficient permissions or a private page.\nPlease check your Confluence permissions, try a different parent page, or contact your Confluence administrator.{Style.RESET_ALL}")
+                logging.warning(f"No pages retrieved for parent page: {page_url}")
+                retry = input("Would you like to try a different parent page or credentials? (y/n) [default: n]: ").strip().lower() or 'n'
+                if retry == 'y':
+                    print(f"{Fore.CYAN}Restart the script and try again with a different page or credentials.{Style.RESET_ALL}")
+                return
+            parent_title = pages[0].get('title') if pages else None
+            print(f"{Fore.CYAN}Found {len(pages)} pages under parent page.{Style.RESET_ALL}")
+            write_metrics_md(pages, output_dir, mode, parent_title)
+            if not metrics_only:
+                download_pages_concurrent(pages, output_dir, dry_run=dry_run)
+            print(f"\n{Fore.GREEN}Summary: {len(pages)} pages processed. Metrics written to {output_dir}/metrics.md{Style.RESET_ALL}")
+    except KeyboardInterrupt:
+        print(f"\n{Fore.YELLOW}Operation cancelled by user. Exiting gracefully.{Style.RESET_ALL}")
+        logging.info("Operation cancelled by user via KeyboardInterrupt.")
+        return
 
 if __name__ == "__main__":
     main()
