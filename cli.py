@@ -25,6 +25,8 @@ def get_args():
     parser.add_argument('--parent-url', help='Parent page URL (for mode 2)')
     parser.add_argument('--space-key', help='Space key (for mode 1)')
     parser.add_argument('--dry-run', action='store_true', default=None, help='Preview actions without writing files')
+    parser.add_argument('--llm-combine', action='store_true', help='Combine downloaded files using an LLM and save the result')
+    parser.add_argument('--llm-model', choices=['gpt-3.5-turbo'], default=None, help='OpenAI LLM model to use for combining files (default: gpt-3.5-turbo)')
     parser.add_argument('--version', action='version', version='%(prog)s 1.0.0', help='Show version and exit')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose (DEBUG) logging')
     return parser.parse_args()
@@ -138,6 +140,54 @@ def run():
                 print(f"  {file_path}")
         else:
             print("  (No files were downloaded.)")
+
+    # LLM combine option: prompt user if not set via CLI
+    llm_combine = getattr(args, 'llm_combine', False)
+    llm_model = getattr(args, 'llm_model', None)
+    if not llm_combine:
+        print(f"\n{Fore.CYAN}=== LLM Combine Option ==={Style.RESET_ALL}")
+        llm_combine_input = prompt_with_validation(
+            f"{Fore.YELLOW}Combine downloaded files into one using an LLM? (y/n){Style.RESET_ALL}",
+            valid_options=['y', 'n'],
+            default='n'
+        )
+        llm_combine = (llm_combine_input == 'y')
+    if llm_combine and not llm_model:
+        print(f"\n{Fore.CYAN}=== LLM Model Selection ==={Style.RESET_ALL}")
+        llm_model = prompt_with_validation(
+            f"{Fore.YELLOW}Select OpenAI model for combining files (default: gpt-3.5-turbo):\n  1. gpt-3.5-turbo{Style.RESET_ALL}",
+            valid_options=['1'],
+            default='1'
+        )
+        llm_model = 'gpt-3.5-turbo'  # Only one free model for now
+    if llm_combine and result.get('downloaded_files'):
+        from llm_utils import combine_files_with_llm
+        import os
+        openai_api_key = os.getenv('OPENAI_API_KEY')
+        if not openai_api_key:
+            print(f"{Fore.RED}OPENAI_API_KEY not set in environment. Skipping LLM combine step.{Style.RESET_ALL}")
+        else:
+            print(f"\n{Fore.CYAN}=== LLM Combining Files ==={Style.RESET_ALL}")
+            # Use parent page name for output file if available
+            parent_name = None
+            if 'selected_options' in result and 'parent_url' in result['selected_options']:
+                parent_url = result['selected_options']['parent_url']
+                # Try to extract a name from the parent_url
+                import re
+                match = re.search(r'/pages/\d+/([^/]+)$', parent_url)
+                if match:
+                    parent_name = match.group(1).replace('+', '_').replace('-', '_')
+            if not parent_name:
+                parent_name = 'LLM_Combined'
+            output_filename = f"{parent_name}_combined.md"
+            llm_output_path = combine_files_with_llm(
+                result['downloaded_files'],
+                args.output_dir or 'confluence_pages',
+                openai_api_key,
+                model=llm_model or 'gpt-3.5-turbo',
+                output_filename=output_filename
+            )
+            print(f"{Fore.GREEN}LLM-combined file saved to: {llm_output_path}{Style.RESET_ALL}")
 
 if __name__ == "__main__":
     run() 

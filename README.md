@@ -132,9 +132,34 @@ AvettaConfluenceDownloader/
 | --dry-run        | Preview actions without writing files                    | (flag)                                |
 | --version        | Show script version and exit                             | (flag)                                |
 | --verbose        | Enable verbose (DEBUG) logging                           | (flag)                                |
+| --llm-combine    | Combine downloaded files using an LLM and save the result         | (flag)                                |
+| --llm-model      | OpenAI LLM model to use for combining files                      | gpt-3.5-turbo (default, free-tier)    |
 
 - Any option not provided will be prompted for interactively, with colorized and clear prompts.
 - After all options are collected, a summary is shown and you must confirm before the script runs.
+
+---
+
+## LLM Combine Feature
+
+- **What it does:** Combines all downloaded Markdown files into a single, improved document using OpenAI's GPT LLM. The LLM is prompted to deduplicate, improve readability, create sections, and reorder information as needed.
+- **How to use:**
+  - Use the `--llm-combine` flag, or answer "yes" to the interactive prompt after download.
+  - The script will use your OpenAI API key (set `OPENAI_API_KEY` in your `.env` or environment).
+  - You can select the model with `--llm-model` (currently only `gpt-3.5-turbo` is available for free-tier keys).
+  - The output file will be named after the parent page (e.g., `Parent_Page_combined.md`).
+  - The LLM prompt is:
+    > combine these files into 1. preserve all unique information. improve readability and flow. create sections and reorder information based on need and where applicable
+  - The script will print the path to the combined file after completion.
+- **Modular:** You can use the `llm_utils.combine_files_with_llm` function directly in your own scripts for automation:
+  ```python
+  from llm_utils import combine_files_with_llm
+  combined_path = combine_files_with_llm([
+      'file1.md', 'file2.md', ...
+  ], output_dir='.', api_key='sk-...', model='gpt-3.5-turbo', output_filename='Combined.md')
+  ```
+- **Note:** Only `gpt-3.5-turbo` is available for free-tier OpenAI API keys. Paid models (e.g., GPT-4) require a paid OpenAI account.
+- **Troubleshooting:** If you see API errors, check your API key, model selection, and ensure you have not exceeded your OpenAI usage limits.
 
 ---
 
@@ -176,6 +201,18 @@ AvettaConfluenceDownloader/
   ```sh
   python cli.py --version
   ```
+
+- **Combine downloaded files with LLM (interactive):**
+  ```sh
+  python cli.py --llm-combine
+  ```
+  (Follow the prompts for mode, parent URL, dry run, overwrite options, and LLM model.)
+
+- **Combine downloaded files with LLM (non-interactive):**
+  ```sh
+  python cli.py --mode 2 --parent-url "https://your-domain.atlassian.net/wiki/spaces/IT/pages/123456789/Parent+Page" --llm-combine
+  ```
+  (The combined file will be named after the parent page, e.g., `Parent_Page_combined.md`.)
 
 ---
 
@@ -263,16 +300,4 @@ This script interacts with the [Confluence Cloud REST API](https://developer.atl
 - **Error:** `ModuleNotFoundError` for any required package.
 - **Solution:**
   - Make sure you have activated your virtual environment:
-    ```sh
-    source .venv/bin/activate
     ```
-
-**4. Still having issues?**
-- Paste the error message into an issue or support request for help.
-- Check the `confluence_downloader.log` file for more details.
-
----
-
-## License
-
-This project is licensed under the MIT License. 
