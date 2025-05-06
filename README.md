@@ -101,6 +101,7 @@ parent_url2: "https://your-domain.atlassian.net/wiki/spaces/IT/pages/987654321/U
 parent_url3: "https://your-domain.atlassian.net/wiki/spaces/IT/pages/192837465/BE+Development"
 llm_combine: true
 llm_model: "gpt-3.5-turbo"
+llm_overwrite_mode: "overwrite"  # or "increment" to avoid overwriting combined files
 ```
 
 Each parent page will be downloaded and, if `llm_combine` is enabled, a uniquely named combined file will be generated for each (e.g., `LLM_Combined_Workstation_Setup.md`).
@@ -121,6 +122,7 @@ Each parent page will be downloaded and, if `llm_combine` is enabled, a uniquely
 | --verbose        | Enable verbose (DEBUG) logging                           | (flag)                                |
 | --llm-combine    | Combine downloaded files using an LLM and save the result| (flag)                                |
 | --llm-model      | OpenAI LLM model to use for combining files              | gpt-3.5-turbo (default, free-tier), gpt-4.1 (gpt-4-1106-preview, NOT free), gpt-4o (NOT free), claude-3.5-sonnet (NOT free, Anthropic API key required) |
+| --llm-overwrite-mode | LLM combine file overwrite mode: overwrite (default) or increment (add number if file exists) | overwrite, increment |
 
 - Any option not provided will be prompted for interactively, with colorized and clear prompts.
 - After all options are collected, a summary is shown and you must confirm before the script runs.
@@ -204,6 +206,9 @@ The script saves downloaded pages as Markdown files in the specified output dire
 **How to use:**
 - Use the `--llm-combine` flag, or answer "yes" to the interactive prompt after download.
 - You can also set `llm_combine: true` in your `config.yaml` for batch or automated runs.
+- Control file overwrite behavior with `--llm-overwrite-mode` (CLI) or `llm_overwrite_mode` (YAML):
+  - `overwrite` (default): Overwrite the combined file if it exists.
+  - `increment`: If the combined file exists, create a new file with a numeric suffix (e.g., `LLM_Combined_2.md`).
 - The script will use your OpenAI API key (set `OPENAI_API_KEY` in your `.env` or environment) or Anthropic API key (for Claude).
 - You can select the model with `--llm-model` or interactively. **Only `gpt-3.5-turbo` is free.**
 - **Available models:**

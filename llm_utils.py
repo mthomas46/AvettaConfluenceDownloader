@@ -9,7 +9,7 @@ from tqdm import tqdm
 import time
 from itertools import cycle
 
-def combine_files_with_llm(file_paths, output_dir, api_key, model="gpt-4", output_filename="LLM_Combined.md"):
+def combine_files_with_llm(file_paths, output_dir, api_key, model="gpt-4", output_filename="LLM_Combined.md", overwrite_mode="overwrite"):
     """
     Combine the given files using an LLM and save the result as a Markdown file.
 
@@ -19,6 +19,7 @@ def combine_files_with_llm(file_paths, output_dir, api_key, model="gpt-4", outpu
         api_key (str): OpenAI API key.
         model (str): OpenAI model to use (default: gpt-4).
         output_filename (str): Name of the output Markdown file.
+        overwrite_mode (str): 'overwrite' (default) or 'increment' to avoid overwriting existing files.
     Returns:
         str: Path to the combined Markdown file, or None on error.
     """
@@ -96,6 +97,13 @@ def combine_files_with_llm(file_paths, output_dir, api_key, model="gpt-4", outpu
         return None
     # Write the LLM's output to the specified Markdown file
     output_path = os.path.join(output_dir, output_filename)
+    if overwrite_mode == "increment":
+        name, ext = os.path.splitext(output_filename)
+        i = 2
+        while os.path.exists(output_path):
+            new_filename = f"{name}_{i}{ext}"
+            output_path = os.path.join(output_dir, new_filename)
+            i += 1
     try:
         print(f"[LLM] Writing combined content to {output_path} ...")
         for _ in tqdm(range(20), desc="Writing file", ncols=70):

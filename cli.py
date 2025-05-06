@@ -34,6 +34,7 @@ def get_args():
         choices=['gpt-3.5-turbo', 'gpt-4-1106-preview', 'gpt-4o', 'claude-3.5-sonnet'],
         default='gpt-3.5-turbo',
         help='LLM model to use for combining files (default: gpt-3.5-turbo). gpt-4.1, gpt-4o, and Claude 3.5 Sonnet are not free.')
+    parser.add_argument('--llm-overwrite-mode', choices=['overwrite', 'increment'], default='overwrite', help='LLM combine file overwrite mode: overwrite (default) or increment (add number if file exists)')
     parser.add_argument('--version', action='version', version='%(prog)s 1.0.0', help='Show version and exit')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose (DEBUG) logging')
     return parser.parse_args()
@@ -94,7 +95,7 @@ def run():
                 "llm_model": "gpt-3.5-turbo",
                 "dry_run": False,
                 "verbose": False,
-                # "overwrite_mode": "overwrite",  # usually set interactively
+                "llm_overwrite_mode": "overwrite",
             }
             # Update config_data with any missing defaults
             for key, value in defaults.items():
@@ -183,12 +184,14 @@ def run():
                                 logging.info(f"[LLM Naming] Final output filename for parent page {idx if 'idx' in locals() else ''}: {output_filename}")
                             logging.info(f"[LLM Naming] Files sent to LLM for parent page {idx} ({parent_dir_part or parent_title}): {result['downloaded_files']}")
                             print(f"{Fore.YELLOW}Calling LLM to combine files for parent page {idx}... This may take a while.{Style.RESET_ALL}")
+                            llm_overwrite_mode = config_data_copy.get('llm_overwrite_mode', 'overwrite')
                             llm_output_path = combine_files_with_llm(
                                 result['downloaded_files'],
                                 args.output_dir or 'confluence_pages',
                                 openai_api_key,
                                 model=llm_model or 'gpt-3.5-turbo',
-                                output_filename=output_filename
+                                output_filename=output_filename,
+                                overwrite_mode=llm_overwrite_mode
                             )
                             if llm_output_path:
                                 print(f"{Fore.GREEN}LLM-combined file saved to: {llm_output_path}{Style.RESET_ALL}")
@@ -404,12 +407,14 @@ def run():
         logging.info(f"[LLM Naming] Files sent to LLM for parent page {idx if 'idx' in locals() else ''}: {result['downloaded_files']}")
         print(f"{Fore.YELLOW}Calling LLM to combine files... This may take a while.{Style.RESET_ALL}")
         logger.info(f"Calling OpenAI LLM with model: {llm_model or 'gpt-3.5-turbo'}")
+        llm_overwrite_mode = getattr(args, 'llm_overwrite_mode', 'overwrite')
         llm_output_path = combine_files_with_llm(
             result['downloaded_files'],
             args.output_dir or 'confluence_pages',
             os.getenv('OPENAI_API_KEY'),
             model=llm_model or 'gpt-3.5-turbo',
-            output_filename=output_filename
+            output_filename=output_filename,
+            overwrite_mode=llm_overwrite_mode
         )
         if llm_output_path:
             print(f"{Fore.GREEN}LLM-combined file saved to: {llm_output_path}{Style.RESET_ALL}")

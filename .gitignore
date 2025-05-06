@@ -23,4 +23,27 @@ ENV/
 config.yaml
 
 # Confluence pages
-confluence_pages/ 
+confluence_pages/
+
+# Ignore Python virtual environments
+.venv/
+
+# Ignore Python cache
+__pycache__/
+*.pyc
+
+# Ignore log files
+confluence_downloader.log
+
+# Ignore environment files (but allow .env.example)
+.env
+!.env.example
+
+# Ignore other sensitive or local config files
+config.yaml
+!config.example.yaml
+
+# Ignore IDE/project files
+.idea/
+.vscode/
+*.iml 
