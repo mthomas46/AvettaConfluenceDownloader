@@ -13,6 +13,7 @@ import logging
 import yaml
 import re
 import os
+import pprint
 
 def get_args():
     """
@@ -96,6 +97,7 @@ def run():
                 "dry_run": False,
                 "verbose": False,
                 "llm_overwrite_mode": "overwrite",
+                "llm_free_prompt_mode": "default",
             }
             # Update config_data with any missing defaults
             for key, value in defaults.items():
@@ -184,19 +186,40 @@ def run():
                                 logging.info(f"[LLM Naming] Final output filename for parent page {idx if 'idx' in locals() else ''}: {output_filename}")
                             logging.info(f"[LLM Naming] Files sent to LLM for parent page {idx} ({parent_dir_part or parent_title}): {result['downloaded_files']}")
                             print(f"{Fore.YELLOW}Calling LLM to combine files for parent page {idx}... This may take a while.{Style.RESET_ALL}")
+                            # Always set llm_overwrite_mode before using it
                             llm_overwrite_mode = config_data_copy.get('llm_overwrite_mode', 'overwrite')
+                            logging.info(f"[LLM Combine] llm_overwrite_mode: {llm_overwrite_mode}")
+                            logging.info(f"[LLM Combine] Intended output filename: {output_filename}")
+                            llm_free_prompt_mode = config_data_copy.get('llm_free_prompt_mode', None)
+                            paid_models = ["gpt-4", "gpt-4-turbo", "gpt-4-32k", "gpt-4o", "gpt-4-1106-preview"]
+                            free_prompt_mode = llm_free_prompt_mode or "default"
+                            if (llm_model or 'gpt-3.5-turbo') not in paid_models and not llm_free_prompt_mode:
+                                print(f"\n{Fore.CYAN}=== LLM Free Prompt Selection ==={Style.RESET_ALL}")
+                                print(f"{Fore.YELLOW}Choose the prompt style for the free LLM model:{Style.RESET_ALL}")
+                                print(f"  1. Default (detailed, organized, with AI note and formatting guide)")
+                                print(f"  2. Quick (short, direct: 'combine these files into 1. preserve all unique information. improve readability and flow. create sections and reorder information based on need and where applicable')")
+                                prompt_choice = prompt_with_validation(
+                                    f"{Fore.YELLOW}Enter 1 for Default, 2 for Quick [default: 1]:{Style.RESET_ALL}",
+                                    valid_options=['1', '2'],
+                                    default='1'
+                                )
+                                free_prompt_mode = "quick" if prompt_choice == '2' else "default"
                             llm_output_path = combine_files_with_llm(
                                 result['downloaded_files'],
                                 args.output_dir or 'confluence_pages',
                                 openai_api_key,
                                 model=llm_model or 'gpt-3.5-turbo',
                                 output_filename=output_filename,
-                                overwrite_mode=llm_overwrite_mode
+                                overwrite_mode=llm_overwrite_mode,
+                                free_prompt_mode=free_prompt_mode
                             )
+                            logger = logging.getLogger("llm_combine")
                             if llm_output_path:
                                 print(f"{Fore.GREEN}LLM-combined file saved to: {llm_output_path}{Style.RESET_ALL}")
+                                logger.info(f"LLM-combined file saved to: {llm_output_path}")
                             else:
-                                print(f"{Fore.RED}LLM combine failed for parent page {idx}. See logs for details.{Style.RESET_ALL}")
+                                print(f"{Fore.RED}LLM combine failed. See logs for details.{Style.RESET_ALL}")
+                                logger.error("LLM combine failed. No output file was created.")
                 return  # End after all parent pages are processed
             # Otherwise, proceed as before with a single parent_url
             from argparse import Namespace
@@ -407,15 +430,34 @@ def run():
         logging.info(f"[LLM Naming] Files sent to LLM for parent page {idx if 'idx' in locals() else ''}: {result['downloaded_files']}")
         print(f"{Fore.YELLOW}Calling LLM to combine files... This may take a while.{Style.RESET_ALL}")
         logger.info(f"Calling OpenAI LLM with model: {llm_model or 'gpt-3.5-turbo'}")
+        # Always set llm_overwrite_mode before using it
         llm_overwrite_mode = getattr(args, 'llm_overwrite_mode', 'overwrite')
+        logging.info(f"[LLM Combine] llm_overwrite_mode: {llm_overwrite_mode}")
+        logging.info(f"[LLM Combine] Intended output filename: {output_filename}")
+        llm_free_prompt_mode = getattr(args, 'llm_free_prompt_mode', None)
+        paid_models = ["gpt-4", "gpt-4-turbo", "gpt-4-32k", "gpt-4o", "gpt-4-1106-preview"]
+        free_prompt_mode = llm_free_prompt_mode or "default"
+        if (llm_model or 'gpt-3.5-turbo') not in paid_models and not llm_free_prompt_mode:
+            print(f"\n{Fore.CYAN}=== LLM Free Prompt Selection ==={Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}Choose the prompt style for the free LLM model:{Style.RESET_ALL}")
+            print(f"  1. Default (detailed, organized, with AI note and formatting guide)")
+            print(f"  2. Quick (short, direct: 'combine these files into 1. preserve all unique information. improve readability and flow. create sections and reorder information based on need and where applicable')")
+            prompt_choice = prompt_with_validation(
+                f"{Fore.YELLOW}Enter 1 for Default, 2 for Quick [default: 1]:{Style.RESET_ALL}",
+                valid_options=['1', '2'],
+                default='1'
+            )
+            free_prompt_mode = "quick" if prompt_choice == '2' else "default"
         llm_output_path = combine_files_with_llm(
             result['downloaded_files'],
             args.output_dir or 'confluence_pages',
             os.getenv('OPENAI_API_KEY'),
             model=llm_model or 'gpt-3.5-turbo',
             output_filename=output_filename,
-            overwrite_mode=llm_overwrite_mode
+            overwrite_mode=llm_overwrite_mode,
+            free_prompt_mode=free_prompt_mode
         )
+        logger = logging.getLogger("llm_combine")
         if llm_output_path:
             print(f"{Fore.GREEN}LLM-combined file saved to: {llm_output_path}{Style.RESET_ALL}")
             logger.info(f"LLM-combined file saved to: {llm_output_path}")
