@@ -121,6 +121,11 @@ def run():
                     config_lines = [f"\nConfiguration for parent page {parent_index}:"]
                     for option_name, option_value in result['config'].items():
                         config_lines.append(f"  {option_name}: {option_value}")
+                    # Add explicit reporting for both overwrite modes if not present
+                    if 'overwrite_mode' in result['config']:
+                        config_lines.append(f"  Overwrite Mode (File Downloads): {result['config'].get('overwrite_mode')}")
+                    if 'llm_overwrite_mode' in config_data_copy:
+                        config_lines.append(f"  Overwrite Mode (LLM Combine): {config_data_copy.get('llm_overwrite_mode')}")
                     config_lines.append(f"\nStatus: {result['status']}")
                     config_lines.append(result['message'])
                     print('\n'.join(config_lines))
@@ -234,6 +239,11 @@ def run():
             config_lines = ["\nConfiguration:"]
             for option_name, option_value in result['config'].items():
                 config_lines.append(f"  {option_name}: {option_value}")
+            # Add explicit reporting for both overwrite modes if not present
+            if 'overwrite_mode' in result['config']:
+                config_lines.append(f"  Overwrite Mode (File Downloads): {result['config'].get('overwrite_mode')}")
+            if hasattr(args, 'llm_overwrite_mode'):
+                config_lines.append(f"  Overwrite Mode (LLM Combine): {getattr(args, 'llm_overwrite_mode')}")
             config_lines.append(f"\nStatus: {result['status']}")
             config_lines.append(result['message'])
             print('\n'.join(config_lines))
@@ -284,9 +294,9 @@ def run():
         )
         args.dry_run = (dry_run_input == 'y')
 
-    # Prompt for overwrite options if not dry-run or metrics-only
+    # Prompt for overwrite options for file downloads if not dry-run or metrics-only
     if not args.dry_run and not args.metrics_only:
-        print(f"{Fore.CYAN}\n=== Overwrite Options ===\n{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}\n=== Overwrite Options for File Downloads ===\n{Style.RESET_ALL}")
         overwrite_choice = prompt_with_validation(
             f"{Fore.YELLOW}{BATCH_PROMPT}\nEnter 1, 2, 3, or 4{Style.RESET_ALL}",
             valid_options=['1', '2', '3', '4'],
@@ -298,13 +308,27 @@ def run():
     else:
         args.overwrite_mode = 'overwrite'
 
+    # Prompt for LLM combine overwrite mode if LLM combine is enabled
+    if getattr(args, 'llm_combine', False):
+        print(f"{Fore.CYAN}\n=== Overwrite Options for LLM Combined File ===\n{Style.RESET_ALL}")
+        llm_overwrite_choice = prompt_with_validation(
+            f"{Fore.YELLOW}How should the LLM combined file be saved if a file with the same name exists?\n  1. Overwrite the existing combined file\n  2. Increment the filename (e.g., LLM_Combined_XYZ_2.md)\nEnter 1 or 2 [default: 1]:{Style.RESET_ALL}",
+            valid_options=['1', '2'],
+            default='1'
+        )
+        llm_overwrite_map = {'1': 'overwrite', '2': 'increment'}
+        args.llm_overwrite_mode = llm_overwrite_map[llm_overwrite_choice]
+    else:
+        args.llm_overwrite_mode = 'overwrite'
+
     # Print summary and confirm
     print(f"{Fore.CYAN}\n=== Summary of Selected Options ==={Style.RESET_ALL}")
     print(f"  Mode: {args.mode}")
     if args.mode == '2':
         print(f"  Parent URL: {args.parent_url}")
     print(f"  Dry Run: {args.dry_run}")
-    print(f"  Overwrite Mode: {args.overwrite_mode}")
+    print(f"  Overwrite Mode (File Downloads): {args.overwrite_mode}")
+    print(f"  Overwrite Mode (LLM Combine): {args.llm_overwrite_mode}")
     print(f"  Metrics Only: {args.metrics_only}")
     print(f"  Output Directory: {args.output_dir or 'confluence_pages'}")
     print(f"  Verbose: {args.verbose}")
@@ -319,6 +343,11 @@ def run():
     config_lines = ["\nConfiguration:"]
     for option_name, option_value in result['config'].items():
         config_lines.append(f"  {option_name}: {option_value}")
+    # Add explicit reporting for both overwrite modes if not present
+    if 'overwrite_mode' in result['config']:
+        config_lines.append(f"  Overwrite Mode (File Downloads): {result['config'].get('overwrite_mode')}")
+    if hasattr(args, 'llm_overwrite_mode'):
+        config_lines.append(f"  Overwrite Mode (LLM Combine): {getattr(args, 'llm_overwrite_mode')}")
     config_lines.append(f"\nStatus: {result['status']}")
     config_lines.append(result['message'])
     print('\n'.join(config_lines))

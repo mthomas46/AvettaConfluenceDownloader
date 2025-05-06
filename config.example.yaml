@@ -10,8 +10,10 @@ llm_model: "gpt-3.5-turbo"  # Options: gpt-3.5-turbo (free), gpt-4-1106-preview,
 # ^ gpt-3.5-turbo (free, OpenAI), gpt-4-1106-preview (paid, OpenAI), gpt-4o (paid, OpenAI), claude-3.5-sonnet (paid, Anthropic)
 dry_run: false  # true for preview only, no files written
 verbose: false  # true for debug logging
+overwrite_mode: "overwrite"  # Options: overwrite (default), skip, ask, increment
+# ^ Controls how individual page files are saved: overwrite, skip, ask, or increment filename if file exists
 llm_overwrite_mode: "overwrite"  # Options: overwrite (default), increment
-# ^ overwrite = overwrite combined file if exists, increment = add number if file exists
+# ^ Controls how the LLM combined file is saved: overwrite or increment filename if file exists
 # Optional: Choose the free prompt style for LLM combine (only applies to free models)
 #   'default' = detailed, organized, with AI note and formatting guide (default)
 #   'quick'   = short, direct: 'combine these files into 1. preserve all unique information. improve readability and flow. create sections and reorder information based on need and where applicable'

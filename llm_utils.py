@@ -174,6 +174,9 @@ def combine_files_with_llm(file_paths, output_dir, api_key, model="gpt-4", outpu
         return None
     # Write the LLM's output to the specified Markdown file
     output_path = os.path.join(output_dir, output_filename)
+    logging.info(f"[LLM Combine][DEBUG] Initial output_path: {output_path}")
+    logging.info(f"[LLM Combine][DEBUG] overwrite_mode: {overwrite_mode}")
+    print(f"[DEBUG] LLM Combine: overwrite_mode={overwrite_mode}, output_path={output_path}")
     if overwrite_mode == "increment":
         name, ext = os.path.splitext(output_filename)
         i = 2
@@ -181,17 +184,22 @@ def combine_files_with_llm(file_paths, output_dir, api_key, model="gpt-4", outpu
         while os.path.exists(output_path):
             if not conflict_detected:
                 logging.info(f"[LLM Combine] Filename conflict detected for {output_path}, triggering increment logic.")
+                print(f"[DEBUG] Conflict detected for {output_path}, incrementing filename...")
                 conflict_detected = True
             new_filename = f"{name}_{i}{ext}"
             output_path = os.path.join(output_dir, new_filename)
+            print(f"[DEBUG] Trying new output_path: {output_path}")
             i += 1
         if conflict_detected:
             logging.info(f"[LLM Combine] Final incremented output filename: {output_path}")
+            print(f"[DEBUG] Final incremented output filename: {output_path}")
     else:
         if os.path.exists(output_path):
             logging.info(f"[LLM Combine] Overwriting existing file: {output_path}")
+            print(f"[DEBUG] Overwriting existing file: {output_path}")
         else:
             logging.info(f"[LLM Combine] No conflict, writing to: {output_path}")
+            print(f"[DEBUG] No conflict, writing to: {output_path}")
     try:
         print(f"[LLM] Writing combined content to {output_path} ...")
         for _ in tqdm(range(20), desc="Writing file", ncols=70):
