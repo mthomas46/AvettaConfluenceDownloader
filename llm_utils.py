@@ -75,11 +75,16 @@ def combine_files_with_llm(file_paths, output_dir, api_key, model="gpt-4", outpu
     paid_models = ["gpt-4", "gpt-4-turbo", "gpt-4-32k", "gpt-4o"]
     if any(m in model for m in paid_models):
         prompt = paid_prompt
+        prompt_type = "paid"
     else:
         if free_prompt_mode == "quick":
             prompt = quick_free_prompt
+            prompt_type = "quick_free"
         else:
             prompt = reduced_prompt
+            prompt_type = "default_free"
+    logging.info(f"[LLM Prompt] Using prompt type: {prompt_type}")
+    logging.info(f"[LLM Prompt] Prompt preview: {prompt[:120].replace('\n', ' ')}...")
     print("\n[LLM] Preparing to read files for combination...")
     combined_content = ""
     # Read and concatenate all file contents, separating with headers
@@ -103,10 +108,10 @@ def combine_files_with_llm(file_paths, output_dir, api_key, model="gpt-4", outpu
             try:
                 print("[LLM] Sending content to OpenAI for combination. This may take a few moments...")
                 def spinner():
-                    for c in cycle(['|', '/', '-', '\\']):
+                    for spinner_char in cycle(['|', '/', '-', '\\']):
                         if stop_spinner:
                             break
-                        print(f'\r[LLM] Waiting for OpenAI response... {c}', end='', flush=True)
+                        print(f'\r[LLM] Waiting for OpenAI response... {spinner_char}', end='', flush=True)
                         time.sleep(0.1)
                     print('\r', end='', flush=True)
                 spinner_thread = threading.Thread(target=spinner)

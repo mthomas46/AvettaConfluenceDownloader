@@ -110,15 +110,15 @@ def run():
             # If more than one parent_url, run main for each
             if len(parent_urls) > 1:
                 print(f"{Fore.CYAN}\n=== Multiple Parent Pages Detected in Config ==={Style.RESET_ALL}")
-                for idx, p_url in enumerate(parent_urls, 1):
-                    print(f"{Fore.YELLOW}Processing parent page {idx}: {p_url}{Style.RESET_ALL}")
+                for parent_index, parent_url_value in enumerate(parent_urls, 1):
+                    print(f"{Fore.YELLOW}Processing parent page {parent_index}: {parent_url_value}{Style.RESET_ALL}")
                     config_data_copy = dict(config_data)
-                    config_data_copy["parent_url"] = p_url
+                    config_data_copy["parent_url"] = parent_url_value
                     from argparse import Namespace
                     args = Namespace(**config_data_copy)
                     # Bypass confirmation prompt for each parent page
                     result = main(args)
-                    config_lines = [f"\nConfiguration for parent page {idx}:"]
+                    config_lines = [f"\nConfiguration for parent page {parent_index}:"]
                     for option_name, option_value in result['config'].items():
                         config_lines.append(f"  {option_name}: {option_value}")
                     config_lines.append(f"\nStatus: {result['status']}")
@@ -155,7 +155,7 @@ def run():
                             if not parent_title and result.get('downloaded_files'):
                                 first_file = result['downloaded_files'][0]
                                 section_dir = os.path.basename(os.path.dirname(first_file))
-                                parent_title = section_dir or f"ParentPage_{idx}"
+                                parent_title = section_dir or f"ParentPage_{parent_index}"
                             # Use the directory containing the parent page's .md file for naming
                             parent_dir_part = None
                             if result.get('downloaded_files'):
@@ -172,20 +172,20 @@ def run():
                                             logging.debug(f"[LLM Naming] File: {file_path} | rel_path: {rel_path} | subdir after 'Development': {parts[dev_idx + 1]}")
                                     else:
                                         logging.debug(f"[LLM Naming] File: {file_path} | rel_path: {rel_path} | 'Development' not in path")
-                                logging.info(f"[LLM Naming] Subdirectories found for parent page {idx if 'idx' in locals() else ''}: {subdirs}")
+                                logging.info(f"[LLM Naming] Subdirectories found for parent page {parent_index}: {subdirs}")
                                 # Use the most common subdir, or fallback to parent_title
                                 if subdirs:
                                     from collections import Counter
                                     section, count = Counter(subdirs).most_common(1)[0]
                                     section_sanitized = re.sub(r'[^A-Za-z0-9]+', '_', section).strip('_')
-                                    logging.info(f"[LLM Naming] Most common subdirectory for parent page {idx if 'idx' in locals() else ''}: {section} (count: {count})")
+                                    logging.info(f"[LLM Naming] Most common subdirectory for parent page {parent_index}: {section} (count: {count})")
                                     output_filename = f"LLM_Combined_{section_sanitized}.md"
                                 else:
-                                    logging.info(f"[LLM Naming] No subdirectory found for parent page {idx if 'idx' in locals() else ''}, using parent_title: {parent_title}")
+                                    logging.info(f"[LLM Naming] No subdirectory found for parent page {parent_index}, using parent_title: {parent_title}")
                                     output_filename = f"LLM_Combined_{parent_title}.md"
-                                logging.info(f"[LLM Naming] Final output filename for parent page {idx if 'idx' in locals() else ''}: {output_filename}")
-                            logging.info(f"[LLM Naming] Files sent to LLM for parent page {idx} ({parent_dir_part or parent_title}): {result['downloaded_files']}")
-                            print(f"{Fore.YELLOW}Calling LLM to combine files for parent page {idx}... This may take a while.{Style.RESET_ALL}")
+                                logging.info(f"[LLM Naming] Final output filename for parent page {parent_index}: {output_filename}")
+                            logging.info(f"[LLM Naming] Files sent to LLM for parent page {parent_index}: {result['downloaded_files']}")
+                            print(f"{Fore.YELLOW}Calling LLM to combine files for parent page {parent_index}... This may take a while.{Style.RESET_ALL}")
                             # Always set llm_overwrite_mode before using it
                             llm_overwrite_mode = config_data_copy.get('llm_overwrite_mode', 'overwrite')
                             logging.info(f"[LLM Combine] llm_overwrite_mode: {llm_overwrite_mode}")
@@ -350,6 +350,7 @@ def run():
     # LLM combine option: prompt user if not set via CLI
     llm_combine = getattr(args, 'llm_combine', False)
     llm_model = getattr(args, 'llm_model', None)
+    parent_index = 1  # Ensure parent_index is defined for single-parent case
     if not llm_combine:
         print(f"\n{Fore.CYAN}=== LLM Combine Option ==={Style.RESET_ALL}")
         llm_combine_input = prompt_with_validation(
@@ -415,19 +416,19 @@ def run():
                         logging.debug(f"[LLM Naming] File: {file_path} | rel_path: {rel_path} | subdir after 'Development': {parts[dev_idx + 1]}")
                 else:
                     logging.debug(f"[LLM Naming] File: {file_path} | rel_path: {rel_path} | 'Development' not in path")
-            logging.info(f"[LLM Naming] Subdirectories found for parent page {idx if 'idx' in locals() else ''}: {subdirs}")
+            logging.info(f"[LLM Naming] Subdirectories found for parent page {parent_index}: {subdirs}")
             # Use the most common subdir, or fallback to parent_title
             if subdirs:
                 from collections import Counter
                 section, count = Counter(subdirs).most_common(1)[0]
                 section_sanitized = re.sub(r'[^A-Za-z0-9]+', '_', section).strip('_')
-                logging.info(f"[LLM Naming] Most common subdirectory for parent page {idx if 'idx' in locals() else ''}: {section} (count: {count})")
+                logging.info(f"[LLM Naming] Most common subdirectory for parent page {parent_index}: {section} (count: {count})")
                 output_filename = f"LLM_Combined_{section_sanitized}.md"
             else:
-                logging.info(f"[LLM Naming] No subdirectory found for parent page {idx if 'idx' in locals() else ''}, using parent_title: {parent_name}")
+                logging.info(f"[LLM Naming] No subdirectory found for parent page {parent_index}, using parent_title: {parent_name}")
                 output_filename = f"LLM_Combined_{parent_name}.md"
-            logging.info(f"[LLM Naming] Final output filename for parent page {idx if 'idx' in locals() else ''}: {output_filename}")
-        logging.info(f"[LLM Naming] Files sent to LLM for parent page {idx if 'idx' in locals() else ''}: {result['downloaded_files']}")
+            logging.info(f"[LLM Naming] Final output filename for parent page {parent_index}: {output_filename}")
+        logging.info(f"[LLM Naming] Files sent to LLM for parent page {parent_index}: {result['downloaded_files']}")
         print(f"{Fore.YELLOW}Calling LLM to combine files... This may take a while.{Style.RESET_ALL}")
         logger.info(f"Calling OpenAI LLM with model: {llm_model or 'gpt-3.5-turbo'}")
         # Always set llm_overwrite_mode before using it

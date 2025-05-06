@@ -83,6 +83,13 @@ This section covers how to configure and use the downloader, including environme
 
 ### Configuration (.env)
 - Copy `.env.example` to `.env` and fill in your Confluence base URL, username, API token, and output directory.
+- Environment variables:
+  - `CONFLUENCE_BASE_URL`: Confluence base URL
+  - `CONFLUENCE_USERNAME`: Confluence username/email
+  - `CONFLUENCE_API_TOKEN`: Confluence API token
+  - `OUTPUT_DIR`: Output directory for downloaded files
+  - `OPENAI_API_KEY`: OpenAI API key (required for LLM combine)
+  - `ANTHROPIC_API_KEY`: Anthropic API key (required for Claude models)
 - Environment variables can be overridden by CLI arguments or YAML config.
 
 ### Batch YAML Configuration (Multi-Parent Page Download)
@@ -102,54 +109,42 @@ parent_url3: "https://your-domain.atlassian.net/wiki/spaces/IT/pages/192837465/B
 llm_combine: true
 llm_model: "gpt-3.5-turbo"
 llm_overwrite_mode: "overwrite"  # or "increment" to avoid overwriting combined files
+llm_free_prompt_mode: "default"  # or "quick" for a shorter prompt (free models only)
+metrics_only: false
+space_key: "IT"
+dry_run: false
+verbose: false
 ```
 
 Each parent page will be downloaded and, if `llm_combine` is enabled, a uniquely named combined file will be generated for each (e.g., `LLM_Combined_Workstation_Setup.md`).
 
 ### CLI Options
 
-| Option           | Description                                              | Example/Values                        |
-|------------------|----------------------------------------------------------|---------------------------------------|
-| --base-url       | Confluence base URL                                      | https://your-domain.atlassian.net/wiki|
-| --username       | Confluence username/email                                | your.email@example.com                |
-| --mode           | Download mode                                            | 1 (entire space), 2 (by parent page)  |
-| --output-dir     | Output directory for downloaded files                    | ./confluence_pages                    |
-| --metrics-only   | Only generate metrics report (no page downloads)         | (flag)                                |
-| --parent-url     | Parent page URL (for mode 2)                             | https://.../pages/123456789/...       |
-| --space-key      | Space key (for mode 1)                                   | DEV                                   |
-| --dry-run        | Preview actions without writing files                    | (flag)                                |
-| --version        | Show script version and exit                             | (flag)                                |
-| --verbose        | Enable verbose (DEBUG) logging                           | (flag)                                |
-| --llm-combine    | Combine downloaded files using an LLM and save the result| (flag)                                |
-| --llm-model      | OpenAI LLM model to use for combining files              | gpt-3.5-turbo (default, free-tier), gpt-4.1 (gpt-4-1106-preview, NOT free), gpt-4o (NOT free), claude-3.5-sonnet (NOT free, Anthropic API key required) |
-| --llm-overwrite-mode | LLM combine file overwrite mode: overwrite (default) or increment (add number if file exists) | overwrite, increment |
+| Option                | Description                                              | Example/Values                        |
+|-----------------------|----------------------------------------------------------|---------------------------------------|
+| --base-url            | Confluence base URL                                      | https://your-domain.atlassian.net/wiki|
+| --username            | Confluence username/email                                | your.email@example.com                |
+| --mode                | Download mode                                            | 1 (entire space), 2 (by parent page)  |
+| --output-dir          | Output directory for downloaded files                    | ./confluence_pages                    |
+| --metrics-only        | Only generate metrics report (no page downloads)         | (flag)                                |
+| --parent-url          | Parent page URL (for mode 2)                             | https://.../pages/123456789/...       |
+| --space-key           | Space key (for mode 1)                                   | DEV                                   |
+| --dry-run             | Preview actions without writing files                    | (flag)                                |
+| --version             | Show script version and exit                             | (flag)                                |
+| --verbose             | Enable verbose (DEBUG) logging                           | (flag)                                |
+| --llm-combine         | Combine downloaded files using an LLM and save the result| (flag)                                |
+| --llm-model           | OpenAI/Anthropic LLM model to use for combining files    | gpt-3.5-turbo (default, free), gpt-4-1106-preview, gpt-4o, claude-3.5-sonnet |
+| --llm-overwrite-mode  | LLM combine file overwrite mode: overwrite (default) or increment (add number if file exists) | overwrite, increment |
+| --llm-free-prompt-mode| Free LLM prompt style: default (detailed) or quick (short)| default, quick                        |
 
 - Any option not provided will be prompted for interactively, with colorized and clear prompts.
 - After all options are collected, a summary is shown and you must confirm before the script runs.
 
 ### Quick Start
 
-1. **Install Python 3.12 or 3.11** (see [Python Version Compatibility](#python-version-compatibility)).
-   - If you need to manage multiple Python versions, see [Using pyenv to Manage Python Versions](#using-pyenv-to-manage-python-versions).
-2. **Create and activate a virtual environment:**
-   ```sh
-   python3.12 -m venv .venv
-   source .venv/bin/activate
-   ```
-3. **Install dependencies:**
-   ```sh
-   pip install -r requirements.txt
-   ```
-4. **Copy and edit the environment file:**
-   ```sh
-   cp .env.example .env
-   # Edit .env with your Confluence base URL, username, API token, and output directory
-   ```
-5. **Run the script:**
-   ```sh
-   python cli.py
-   ```
-   - If you do not provide all required options as arguments or in your `.env`, the script will prompt you interactively with colorized prompts.
+1. Copy `.env.example` to `.env` and fill in your credentials and API keys.
+2. Optionally, create a `config.yaml` for batch or automated runs.
+3. Run the script and follow the prompts, or use CLI options for automation.
 
 ### Example Workflows
 
@@ -213,11 +208,17 @@ The script saves downloaded pages as Markdown files in the specified output dire
 - You can select the model with `--llm-model` or interactively. **Only `gpt-3.5-turbo` is free.**
 - **Available models:**
   - `gpt-3.5-turbo` (free, OpenAI)
-  - `gpt-4.1` (`gpt-4-1106-preview`, **NOT free**, OpenAI paid account required)
+  - `gpt-4-1106-preview` (**NOT free**, OpenAI paid account required)
   - `gpt-4o` (**NOT free**, OpenAI paid account required)
   - `claude-3.5-sonnet` (**NOT free**, Anthropic API key required)
 - The output file will be named after the parent page or section (e.g., `LLM_Combined_Workstation_Setup.md`).
 - The script will print the path to the combined file after completion.
+- **Prompt selection:**
+  - For paid models, a detailed technical writing prompt is used.
+  - For free models, you can choose between:
+    - **Default:** A detailed, organized prompt with AI note and formatting guide.
+    - **Quick:** A short, direct prompt: `combine these files into 1. preserve all unique information. improve readability and flow. create sections and reorder information based on need and where applicable`.
+  - The prompt type and a preview are logged for each LLM combine run.
 
 **What happens under the hood:**
 When combining files, the script instructs the LLM to:
@@ -229,10 +230,13 @@ When combining files, the script instructs the LLM to:
 
 These strategies help produce a single, comprehensive, and well-organized Markdown document from multiple Confluence pages.
 
-**LLM Prompt Used (example):**
-```
-combine these files into 1. preserve all unique information. improve readability and flow. create sections and reorder information based on need and where applicable
-```
+**LLM Prompt Used (examples):**
+- **Default (free):**
+  > You are a technical writer. Combine the content of all these files into a single, well-structured Markdown document. ...
+- **Quick (free):**
+  > combine these files into 1. preserve all unique information. improve readability and flow. create sections and reorder information based on need and where applicable
+- **Paid:**
+  > You are acting as a professional technical writer. Your goal is to create a single, comprehensive, and easy-to-navigate Markdown document ...
 
 **Modular usage:**
 You can use the `llm_utils.combine_files_with_llm` function directly in your own scripts for automation:
@@ -240,12 +244,26 @@ You can use the `llm_utils.combine_files_with_llm` function directly in your own
 from llm_utils import combine_files_with_llm
 combined_path = combine_files_with_llm([
     'file1.md', 'file2.md', ...
-], output_dir='.', api_key='sk-...', model='gpt-3.5-turbo', output_filename='Combined.md')
+], output_dir='.', api_key='sk-...', model='gpt-3.5-turbo', output_filename='Combined.md', overwrite_mode='overwrite', free_prompt_mode='default')
 ```
 
 **Warning:** Only `gpt-3.5-turbo` is free. All other models require a paid OpenAI or Anthropic account and the correct API key. You will be warned in the CLI if you select a non-free model.
 
-**Troubleshooting:** If you see API errors, check your API key, model selection, and ensure you have not exceeded your OpenAI or Anthropic usage limits.
+---
+
+## Multi-Parent Batch Support
+
+- You can specify multiple parent pages in your YAML config using `parent_url`, `parent_url2`, etc.
+- The script will process each parent page in sequence, generating separate outputs for each.
+- All LLM combine and file naming logic is applied per parent page.
+
+---
+
+## Logging
+
+- All major steps, errors, and configuration choices are logged to `confluence_downloader.log`.
+- The LLM combine step logs the prompt type and a preview of the prompt used for each run.
+- Overwrite/increment logic and output filenames are logged for traceability.
 
 ---
 

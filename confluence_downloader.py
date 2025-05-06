@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 from tqdm import tqdm
 import sys
+from itertools import cycle
 
 if not (sys.version_info.major == 3 and sys.version_info.minor in (11, 12)):
     print("""

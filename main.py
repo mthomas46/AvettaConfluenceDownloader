@@ -131,7 +131,8 @@ def main(args) -> dict:
         # Save pages as Markdown unless metrics_only; collect filenames for reporting
         if not args.metrics_only:
             print("[Progress] Saving downloaded pages as Markdown files...")
-            for page in tqdm(pages, desc="Saving pages", ncols=70):
+            for page_index in range(len(pages)):
+                page = pages[page_index]
                 dir_path, filename, file_path = build_page_filepath(page, output_dir)
                 save_success = save_page(
                     page,
