@@ -9,6 +9,7 @@ from constants import BATCH_PROMPT, USER_PROMPT_OVERWRITE, Mode
 from argparse import ArgumentParser
 import sys
 from colorama import Fore, Style
+import logging
 
 def get_args():
     """
@@ -120,26 +121,36 @@ def run():
     print(f"{Fore.CYAN}\n=== Starting Download Process ===\n{Style.RESET_ALL}")
     result = main(args)
     # Print config summary
-    print("\nConfiguration:")
+    config_lines = ["\nConfiguration:"]
     for option_name, option_value in result['config'].items():
-        print(f"  {option_name}: {option_value}")
-    print(f"\nStatus: {result['status']}")
-    print(result['message'])
+        config_lines.append(f"  {option_name}: {option_value}")
+    config_lines.append(f"\nStatus: {result['status']}")
+    config_lines.append(result['message'])
+    print('\n'.join(config_lines))
 
     # Print selected options
     if 'selected_options' in result:
-        print(f"\n{Fore.CYAN}=== Selected Options ==={Style.RESET_ALL}")
+        selected_lines = [f"\n{Fore.CYAN}=== Selected Options ==={Style.RESET_ALL}"]
         for option_name, option_value in result['selected_options'].items():
-            print(f"  {option_name}: {option_value}")
+            selected_lines.append(f"  {option_name}: {option_value}")
+        print('\n'.join(selected_lines))
 
     # Print downloaded files
     if 'downloaded_files' in result:
-        print(f"\n{Fore.CYAN}=== Downloaded Files ==={Style.RESET_ALL}")
         if result['downloaded_files']:
-            for file_path in result['downloaded_files']:
-                print(f"  {file_path}")
+            files_section = [f"\n{Fore.CYAN}=== Downloaded Files ==={Style.RESET_ALL}"]
+            files_section += [f"  {file_path}" for file_path in result['downloaded_files']]
+            print('\n'.join(files_section))
         else:
-            print("  (No files were downloaded.)")
+            print(f"\n{Fore.CYAN}=== Downloaded Files ==={Style.RESET_ALL}\n  (No files were downloaded.)")
+
+    # LLM combine option: skip if metrics-only or no files downloaded
+    if args.metrics_only:
+        print(f"{Fore.YELLOW}Metrics-only mode: LLM combine is not available because no files were downloaded.{Style.RESET_ALL}")
+        return
+    if not result.get('downloaded_files') or not result['downloaded_files']:
+        print(f"{Fore.YELLOW}No files were downloaded, so LLM combine is not available.{Style.RESET_ALL}")
+        return
 
     # LLM combine option: prompt user if not set via CLI
     llm_combine = getattr(args, 'llm_combine', False)
@@ -160,14 +171,19 @@ def run():
             default='1'
         )
         llm_model = 'gpt-3.5-turbo'  # Only one free model for now
-    if llm_combine and result.get('downloaded_files'):
+    if llm_combine:
         from llm_utils import combine_files_with_llm
         import os
         openai_api_key = os.getenv('OPENAI_API_KEY')
         if not openai_api_key:
             print(f"{Fore.RED}OPENAI_API_KEY not set in environment. Skipping LLM combine step.{Style.RESET_ALL}")
         else:
+            logging.basicConfig(level=logging.INFO)
+            logger = logging.getLogger("llm_combine")
             print(f"\n{Fore.CYAN}=== LLM Combining Files ==={Style.RESET_ALL}")
+            logger.info("Starting LLM combine process.")
+            print(f"{Fore.YELLOW}Preparing files for LLM...{Style.RESET_ALL}")
+            logger.debug(f"Files to combine: {result['downloaded_files']}")
             # Use parent page name for output file if available
             parent_name = None
             if 'selected_options' in result and 'parent_url' in result['selected_options']:
@@ -178,8 +194,10 @@ def run():
                 if match:
                     parent_name = match.group(1).replace('+', '_').replace('-', '_')
             if not parent_name:
-                parent_name = 'LLM_Combined'
-            output_filename = f"{parent_name}_combined.md"
+                parent_name = 'ParentPage'
+            output_filename = f"LLM_Combined_{parent_name}.md"
+            print(f"{Fore.YELLOW}Calling LLM to combine files... This may take a while.{Style.RESET_ALL}")
+            logger.info(f"Calling OpenAI LLM with model: {llm_model or 'gpt-3.5-turbo'}")
             llm_output_path = combine_files_with_llm(
                 result['downloaded_files'],
                 args.output_dir or 'confluence_pages',
@@ -187,7 +205,12 @@ def run():
                 model=llm_model or 'gpt-3.5-turbo',
                 output_filename=output_filename
             )
-            print(f"{Fore.GREEN}LLM-combined file saved to: {llm_output_path}{Style.RESET_ALL}")
+            if llm_output_path:
+                print(f"{Fore.GREEN}LLM-combined file saved to: {llm_output_path}{Style.RESET_ALL}")
+                logger.info(f"LLM-combined file saved to: {llm_output_path}")
+            else:
+                print(f"{Fore.RED}LLM combine failed. See logs for details.{Style.RESET_ALL}")
+                logger.error("LLM combine failed. No output file was created.")
 
 if __name__ == "__main__":
     run() 

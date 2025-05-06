@@ -14,6 +14,9 @@ from confluence_api import (
 from file_ops import sanitize_filename, unique_filename, consolidate_markdown_files, save_page, build_page_filepath
 from constants import DEFAULT_BASE_URL, STUB_EMAIL, STUB_TOKEN, DEFAULT_OUTPUT_DIR, Mode
 import os
+from tqdm import tqdm
+import time
+from itertools import cycle
 
 __version__ = "1.0.0"
 
@@ -82,6 +85,7 @@ def main(args) -> dict:
                 'status': 'error',
                 'message': 'Parent page URL is required for mode 2 (by parent).'
             }
+        print("[Progress] Extracting page ID from parent URL...")
         parent_id = get_page_id_from_url(parent_url, base_url, auth)
         if not parent_id:
             return {
@@ -89,8 +93,23 @@ def main(args) -> dict:
                 'status': 'error',
                 'message': 'Could not extract page ID from parent URL.'
             }
-        # Fetch all descendant pages under the parent
+        print("[Progress] Fetching all descendant pages from Confluence (this may take a while)...")
+        # Spinner for API call
+        import threading
+        stop_spinner = False
+        def spinner():
+            for c in cycle(['|', '/', '-', '\\']):
+                if stop_spinner:
+                    break
+                print(f'\r[Progress] Fetching pages... {c}', end='', flush=True)
+                time.sleep(0.1)
+            print('\r', end='', flush=True)
+        spinner_thread = threading.Thread(target=spinner)
+        spinner_thread.start()
         pages = get_descendants(base_url, auth, parent_id)
+        stop_spinner = True
+        spinner_thread.join()
+        print("[Progress] Finished fetching descendant pages.")
         if not pages:
             return {
                 'config': locals(),
@@ -111,7 +130,8 @@ def main(args) -> dict:
         downloaded_files = []
         # Save pages as Markdown unless metrics_only; collect filenames for reporting
         if not args.metrics_only:
-            for page in pages:
+            print("[Progress] Saving downloaded pages as Markdown files...")
+            for page in tqdm(pages, desc="Saving pages", ncols=70):
                 dir_path, filename, file_path = build_page_filepath(page, output_dir)
                 save_success = save_page(
                     page,
@@ -122,12 +142,13 @@ def main(args) -> dict:
                 if save_success:
                     downloaded_files.append(file_path)
                 else:
-                    # Return error if any page fails to save
+                    print(f"[Progress] Error saving page: {page.get('title', 'Untitled')}")
                     return {
                         'config': locals(),
                         'status': 'error',
                         'message': f'Error saving page "{page.get('title', 'Untitled')}".'
                     }
+            print("[Progress] Finished saving all pages.")
         # Return summary, config, and file list for CLI to display
         return {
             'config': {

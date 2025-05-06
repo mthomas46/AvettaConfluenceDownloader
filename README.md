@@ -168,9 +168,39 @@ AvettaConfluenceDownloader/
 - A metrics report (`metrics.md`) is generated summarizing the download (page count, metadata, etc.).
 - Optionally, you can consolidate all markdown files into a single document (`Consolidated.md`).
 - Logs are written to `confluence_downloader.log` for troubleshooting and auditing.
-- Progress is shown with a modern progress bar (tqdm).
+- Progress is shown with modern progress bars (tqdm) and spinners for all major steps:
+  - Downloading pages
+  - Fetching data from the Confluence API
+  - Combining files with LLM (OpenAI)
+  - Writing output files
+  - All long-running steps provide visual feedback so you always know the script is working.
 - **Dry run mode** prints all actions that would be taken, including overwrite logic, without writing any files.
 - **At the end of the run, the CLI displays a summary of selected options and a list of all files that were downloaded (or would be downloaded in dry run mode).**
+
+---
+
+## Logging
+
+- The script creates a log file (`confluence_downloader.log`) with detailed info and errors for troubleshooting.
+- All user-facing output is colorized and progress-aware for a modern CLI experience.
+
+---
+
+## Dependencies
+
+All dependencies are pinned in `requirements.txt`:
+
+```
+openai>=1.77.0
+colorama>=0.4.6
+tqdm>=4.67.1
+beautifulsoup4>=4.12.3
+requests>=2.31.0
+lxml>=5.2.1
+python-dotenv==1.0.1
+```
+
+These cover all required features: OpenAI API, colored output, progress bars, HTML parsing, HTTP requests, and environment variable loading.
 
 ---
 
