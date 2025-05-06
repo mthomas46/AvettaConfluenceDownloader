@@ -133,7 +133,7 @@ AvettaConfluenceDownloader/
 | --version        | Show script version and exit                             | (flag)                                |
 | --verbose        | Enable verbose (DEBUG) logging                           | (flag)                                |
 | --llm-combine    | Combine downloaded files using an LLM and save the result         | (flag)                                |
-| --llm-model      | OpenAI LLM model to use for combining files                      | gpt-3.5-turbo (default, free-tier)    |
+| --llm-model      | OpenAI LLM model to use for combining files                      | gpt-3.5-turbo (default, free-tier), gpt-4.1 (gpt-4-1106-preview, NOT free), gpt-4o (NOT free), claude-3.5-sonnet (NOT free, Anthropic API key required) |
 
 - Any option not provided will be prompted for interactively, with colorized and clear prompts.
 - After all options are collected, a summary is shown and you must confirm before the script runs.
@@ -142,11 +142,16 @@ AvettaConfluenceDownloader/
 
 ## LLM Combine Feature
 
-- **What it does:** Combines all downloaded Markdown files into a single, improved document using OpenAI's GPT LLM. The LLM is prompted to deduplicate, improve readability, create sections, and reorder information as needed.
+- **What it does:** Combines all downloaded Markdown files into a single, improved document using an LLM (OpenAI or Anthropic). The LLM is prompted to deduplicate, improve readability, create sections, and reorder information as needed.
 - **How to use:**
   - Use the `--llm-combine` flag, or answer "yes" to the interactive prompt after download.
-  - The script will use your OpenAI API key (set `OPENAI_API_KEY` in your `.env` or environment).
-  - You can select the model with `--llm-model` (currently only `gpt-3.5-turbo` is available for free-tier keys).
+  - The script will use your OpenAI API key (set `OPENAI_API_KEY` in your `.env` or environment) or Anthropic API key (for Claude).
+  - You can select the model with `--llm-model` or interactively. **Only `gpt-3.5-turbo` is free.**
+  - **Available models:**
+    - `gpt-3.5-turbo` (free, OpenAI)
+    - `gpt-4.1` (`gpt-4-1106-preview`, **NOT free**, OpenAI paid account required)
+    - `gpt-4o` (**NOT free**, OpenAI paid account required)
+    - `claude-3.5-sonnet` (**NOT free**, Anthropic API key required)
   - The output file will be named after the parent page (e.g., `Parent_Page_combined.md`).
   - The LLM prompt is:
     > combine these files into 1. preserve all unique information. improve readability and flow. create sections and reorder information based on need and where applicable
@@ -158,8 +163,8 @@ AvettaConfluenceDownloader/
       'file1.md', 'file2.md', ...
   ], output_dir='.', api_key='sk-...', model='gpt-3.5-turbo', output_filename='Combined.md')
   ```
-- **Note:** Only `gpt-3.5-turbo` is available for free-tier OpenAI API keys. Paid models (e.g., GPT-4) require a paid OpenAI account.
-- **Troubleshooting:** If you see API errors, check your API key, model selection, and ensure you have not exceeded your OpenAI usage limits.
+- **Warning:** Only `gpt-3.5-turbo` is free. All other models require a paid OpenAI or Anthropic account and the correct API key. You will be warned in the CLI if you select a non-free model.
+- **Troubleshooting:** If you see API errors, check your API key, model selection, and ensure you have not exceeded your OpenAI or Anthropic usage limits.
 
 ---
 

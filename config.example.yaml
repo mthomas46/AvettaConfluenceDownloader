@@ -1,0 +1,18 @@
+base_url: "https://your-domain.atlassian.net/wiki"  # Replace with your Confluence base URL
+username: "your.email@example.com"  # Replace with your Confluence email
+mode: "2"  # 1 for entire space, 2 for by parent page
+output_dir: "confluence_pages"  # Default output directory
+metrics_only: false  # true to only generate metrics report, false to download pages
+parent_url: "https://your-domain.atlassian.net/wiki/spaces/IT/pages/123456789/Parent+Page"  # Example parent page URL
+space_key: "IT"  # Only needed for mode 1
+llm_combine: false  # true to combine files with LLM after download
+llm_model: "gpt-3.5-turbo"  # gpt-3.5-turbo (free), gpt-4-1106-preview, gpt-4o, claude-3.5-sonnet
+dry_run: false  # true for preview only, no files written
+verbose: false  # true for debug logging
+# overwrite_mode is set interactively or defaults to 'overwrite' in non-interactive mode
+
+# --- Developer Note ---
+# To run downloads for multiple parent pages, you can duplicate the parent_url entry as shown below.
+# The CLI and main.py currently support only a single parent_url at a time, but you can script multiple runs or extend the logic.
+# Example for a second parent page (uncomment and adapt as needed):
+# parent_url_2: "https://your-domain.atlassian.net/wiki/spaces/HR/pages/9988776655/HR-Parent-Page"  # Example second parent page 

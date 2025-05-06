@@ -20,6 +20,7 @@ ENV/
 
 # Environment variables
 .env
+config.yaml
 
 # Confluence pages
 confluence_pages/ 

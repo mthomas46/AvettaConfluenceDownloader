@@ -5,11 +5,14 @@ Handles all user interaction, argument parsing, and the CLI entry point for the 
 All prompts, printing, and user-facing output are centralized here.
 """
 from main import main
-from constants import BATCH_PROMPT, USER_PROMPT_OVERWRITE, Mode
+from constants import BATCH_PROMPT, USER_PROMPT_OVERWRITE, Mode, DEFAULT_BASE_URL, DEFAULT_OUTPUT_DIR, STUB_EMAIL
 from argparse import ArgumentParser
 import sys
 from colorama import Fore, Style
 import logging
+import yaml
+import re
+import os
 
 def get_args():
     """
@@ -27,7 +30,10 @@ def get_args():
     parser.add_argument('--space-key', help='Space key (for mode 1)')
     parser.add_argument('--dry-run', action='store_true', default=None, help='Preview actions without writing files')
     parser.add_argument('--llm-combine', action='store_true', help='Combine downloaded files using an LLM and save the result')
-    parser.add_argument('--llm-model', choices=['gpt-3.5-turbo'], default=None, help='OpenAI LLM model to use for combining files (default: gpt-3.5-turbo)')
+    parser.add_argument('--llm-model',
+        choices=['gpt-3.5-turbo', 'gpt-4-1106-preview', 'gpt-4o', 'claude-3.5-sonnet'],
+        default='gpt-3.5-turbo',
+        help='LLM model to use for combining files (default: gpt-3.5-turbo). gpt-4.1, gpt-4o, and Claude 3.5 Sonnet are not free.')
     parser.add_argument('--version', action='version', version='%(prog)s 1.0.0', help='Show version and exit')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose (DEBUG) logging')
     return parser.parse_args()
@@ -61,6 +67,169 @@ def run():
     Main CLI flow: prompts the user for all required options, shows a summary, and displays results.
     Handles all user interaction and output for the Confluence Downloader.
     """
+    # Prompt for config file automation FIRST
+    use_config = prompt_with_validation(
+        f"{Fore.YELLOW}Run from config file? (y/n){Style.RESET_ALL}",
+        valid_options=['y', 'n'],
+        default='n'
+    )
+    if use_config == 'y':
+        config_path = input(f"{Fore.YELLOW}Enter config file path [default: config.yaml]: {Style.RESET_ALL}").strip() or 'config.yaml'
+        try:
+            with open(config_path, 'r') as f:
+                config_data = yaml.safe_load(f)
+            if not config_data:
+                print(f"{Fore.RED}Config file is empty or invalid!{Style.RESET_ALL}")
+                sys.exit(1)
+            # Fill in missing config values with defaults if not present in YAML
+            defaults = {
+                "base_url": DEFAULT_BASE_URL,
+                "username": STUB_EMAIL,
+                "mode": "2",
+                "output_dir": DEFAULT_OUTPUT_DIR,
+                "metrics_only": False,
+                "parent_url": "",
+                "space_key": "",
+                "llm_combine": False,
+                "llm_model": "gpt-3.5-turbo",
+                "dry_run": False,
+                "verbose": False,
+                # "overwrite_mode": "overwrite",  # usually set interactively
+            }
+            # Update config_data with any missing defaults
+            for key, value in defaults.items():
+                if key not in config_data or config_data[key] is None:
+                    config_data[key] = value
+            # Detect multiple parent_url entries (parent_url, parent_url2, parent_url3, ...)
+            parent_url_items = [(key, value) for key, value in config_data.items() if re.fullmatch(r"parent_url\d*", key) and value]
+            parent_url_items.sort(key=lambda x: (int(x[0][10:]) if x[0] != "parent_url" else 0))
+            parent_urls = [value for key, value in parent_url_items]
+            # If more than one parent_url, run main for each
+            if len(parent_urls) > 1:
+                print(f"{Fore.CYAN}\n=== Multiple Parent Pages Detected in Config ==={Style.RESET_ALL}")
+                for idx, p_url in enumerate(parent_urls, 1):
+                    print(f"{Fore.YELLOW}Processing parent page {idx}: {p_url}{Style.RESET_ALL}")
+                    config_data_copy = dict(config_data)
+                    config_data_copy["parent_url"] = p_url
+                    from argparse import Namespace
+                    args = Namespace(**config_data_copy)
+                    # Bypass confirmation prompt for each parent page
+                    result = main(args)
+                    config_lines = [f"\nConfiguration for parent page {idx}:"]
+                    for option_name, option_value in result['config'].items():
+                        config_lines.append(f"  {option_name}: {option_value}")
+                    config_lines.append(f"\nStatus: {result['status']}")
+                    config_lines.append(result['message'])
+                    print('\n'.join(config_lines))
+                    if 'selected_options' in result:
+                        selected_lines = [f"\n{Fore.CYAN}=== Selected Options ==={Style.RESET_ALL}"]
+                        for option_name, option_value in result['selected_options'].items():
+                            selected_lines.append(f"  {option_name}: {option_value}")
+                        print('\n'.join(selected_lines))
+                    if 'downloaded_files' in result:
+                        if result['downloaded_files']:
+                            files_section = [f"\n{Fore.CYAN}=== Downloaded Files ==={Style.RESET_ALL}"]
+                            files_section += [f"  {file_path}" for file_path in result['downloaded_files']]
+                            print('\n'.join(files_section))
+                        else:
+                            print(f"\n{Fore.CYAN}=== Downloaded Files ==={Style.RESET_ALL}\n  (No files were downloaded.)")
+                    # LLM combine for each parent page
+                    llm_combine = getattr(args, 'llm_combine', False)
+                    llm_model = getattr(args, 'llm_model', None)
+                    if llm_combine and result.get('downloaded_files'):
+                        from llm_utils import combine_files_with_llm
+                        openai_api_key = os.getenv('OPENAI_API_KEY')
+                        if not openai_api_key:
+                            print(f"{Fore.RED}OPENAI_API_KEY not set in environment. Skipping LLM combine step.{Style.RESET_ALL}")
+                        else:
+                            parent_title = None
+                            # Try to get parent_title from result['config'] or result['message']
+                            if 'config' in result and 'parent_url' in result['config']:
+                                match = re.search(r'/pages/\d+/([^/]+)$', result['config']['parent_url'])
+                                if match:
+                                    parent_title = match.group(1).replace('+', '_').replace('-', '_')
+                            # Fallback: use section/directory name from first downloaded file
+                            if not parent_title and result.get('downloaded_files'):
+                                first_file = result['downloaded_files'][0]
+                                section_dir = os.path.basename(os.path.dirname(first_file))
+                                parent_title = section_dir or f"ParentPage_{idx}"
+                            # Use the directory containing the parent page's .md file for naming
+                            parent_dir_part = None
+                            if result.get('downloaded_files'):
+                                output_dir = args.output_dir or 'confluence_pages'
+                                # Find the most common subdirectory under 'Development' for this parent page's files
+                                subdirs = []
+                                for file_path in result['downloaded_files']:
+                                    rel_path = os.path.relpath(file_path, output_dir)
+                                    parts = rel_path.split(os.sep)
+                                    if 'Development' in parts:
+                                        dev_idx = parts.index('Development')
+                                        if dev_idx + 1 < len(parts):
+                                            subdirs.append(parts[dev_idx + 1])
+                                            logging.debug(f"[LLM Naming] File: {file_path} | rel_path: {rel_path} | subdir after 'Development': {parts[dev_idx + 1]}")
+                                    else:
+                                        logging.debug(f"[LLM Naming] File: {file_path} | rel_path: {rel_path} | 'Development' not in path")
+                                logging.info(f"[LLM Naming] Subdirectories found for parent page {idx if 'idx' in locals() else ''}: {subdirs}")
+                                # Use the most common subdir, or fallback to parent_title
+                                if subdirs:
+                                    from collections import Counter
+                                    section, count = Counter(subdirs).most_common(1)[0]
+                                    section_sanitized = re.sub(r'[^A-Za-z0-9]+', '_', section).strip('_')
+                                    logging.info(f"[LLM Naming] Most common subdirectory for parent page {idx if 'idx' in locals() else ''}: {section} (count: {count})")
+                                    output_filename = f"LLM_Combined_{section_sanitized}.md"
+                                else:
+                                    logging.info(f"[LLM Naming] No subdirectory found for parent page {idx if 'idx' in locals() else ''}, using parent_title: {parent_title}")
+                                    output_filename = f"LLM_Combined_{parent_title}.md"
+                                logging.info(f"[LLM Naming] Final output filename for parent page {idx if 'idx' in locals() else ''}: {output_filename}")
+                            logging.info(f"[LLM Naming] Files sent to LLM for parent page {idx} ({parent_dir_part or parent_title}): {result['downloaded_files']}")
+                            print(f"{Fore.YELLOW}Calling LLM to combine files for parent page {idx}... This may take a while.{Style.RESET_ALL}")
+                            llm_output_path = combine_files_with_llm(
+                                result['downloaded_files'],
+                                args.output_dir or 'confluence_pages',
+                                openai_api_key,
+                                model=llm_model or 'gpt-3.5-turbo',
+                                output_filename=output_filename
+                            )
+                            if llm_output_path:
+                                print(f"{Fore.GREEN}LLM-combined file saved to: {llm_output_path}{Style.RESET_ALL}")
+                            else:
+                                print(f"{Fore.RED}LLM combine failed for parent page {idx}. See logs for details.{Style.RESET_ALL}")
+                return  # End after all parent pages are processed
+            # Otherwise, proceed as before with a single parent_url
+            from argparse import Namespace
+            args = Namespace(**config_data)
+            confirm = input(f"{Fore.YELLOW}\nProceed with these settings? (y/n) [default: y]: {Style.RESET_ALL}").strip().lower() or 'y'
+            if confirm != 'y':
+                print(f"{Fore.RED}Aborted by user.{Style.RESET_ALL}")
+                sys.exit(0)
+            print(f"{Fore.CYAN}\n=== Starting Download Process ===\n{Style.RESET_ALL}")
+            result = main(args)
+            # Print config summary
+            config_lines = ["\nConfiguration:"]
+            for option_name, option_value in result['config'].items():
+                config_lines.append(f"  {option_name}: {option_value}")
+            config_lines.append(f"\nStatus: {result['status']}")
+            config_lines.append(result['message'])
+            print('\n'.join(config_lines))
+            # Print selected options
+            if 'selected_options' in result:
+                selected_lines = [f"\n{Fore.CYAN}=== Selected Options ==={Style.RESET_ALL}"]
+                for option_name, option_value in result['selected_options'].items():
+                    selected_lines.append(f"  {option_name}: {option_value}")
+                print('\n'.join(selected_lines))
+            # Print downloaded files
+            if 'downloaded_files' in result:
+                if result['downloaded_files']:
+                    files_section = [f"\n{Fore.CYAN}=== Downloaded Files ==={Style.RESET_ALL}"]
+                    files_section += [f"  {file_path}" for file_path in result['downloaded_files']]
+                    print('\n'.join(files_section))
+                else:
+                    print(f"\n{Fore.CYAN}=== Downloaded Files ==={Style.RESET_ALL}\n  (No files were downloaded.)")
+            # sys.exit(0)  # Remove this line to allow processing to continue after all parent pages
+        except Exception as e:
+            print(f"{Fore.RED}Failed to load config file: {e}{Style.RESET_ALL}")
+            sys.exit(1)
+
     args = get_args()
 
     # Prompt for mode if not provided
@@ -165,52 +334,89 @@ def run():
         llm_combine = (llm_combine_input == 'y')
     if llm_combine and not llm_model:
         print(f"\n{Fore.CYAN}=== LLM Model Selection ==={Style.RESET_ALL}")
-        llm_model = prompt_with_validation(
-            f"{Fore.YELLOW}Select OpenAI model for combining files (default: gpt-3.5-turbo):\n  1. gpt-3.5-turbo{Style.RESET_ALL}",
-            valid_options=['1'],
+        llm_model_options = [
+            ('1', 'gpt-3.5-turbo (free)'),
+            ('2', 'gpt-4.1 (gpt-4-1106-preview, NOT free)'),
+            ('3', 'gpt-4o (NOT free)'),
+            ('4', 'claude-3.5-sonnet (NOT free, Anthropic API key required)')
+        ]
+        print(f"{Fore.YELLOW}Select LLM model for combining files:{Style.RESET_ALL}")
+        for num, desc in llm_model_options:
+            print(f"  {num}. {desc}")
+        llm_model_choice = prompt_with_validation(
+            f"{Fore.YELLOW}Enter 1, 2, 3, or 4 [default: 1]:{Style.RESET_ALL}",
+            valid_options=['1', '2', '3', '4'],
             default='1'
         )
-        llm_model = 'gpt-3.5-turbo'  # Only one free model for now
+        llm_model_map = {
+            '1': 'gpt-3.5-turbo',
+            '2': 'gpt-4-1106-preview',
+            '3': 'gpt-4o',
+            '4': 'claude-3.5-sonnet'
+        }
+        llm_model = llm_model_map[llm_model_choice]
     if llm_combine:
         from llm_utils import combine_files_with_llm
-        import os
-        openai_api_key = os.getenv('OPENAI_API_KEY')
-        if not openai_api_key:
-            print(f"{Fore.RED}OPENAI_API_KEY not set in environment. Skipping LLM combine step.{Style.RESET_ALL}")
-        else:
-            logging.basicConfig(level=logging.INFO)
-            logger = logging.getLogger("llm_combine")
-            print(f"\n{Fore.CYAN}=== LLM Combining Files ==={Style.RESET_ALL}")
-            logger.info("Starting LLM combine process.")
-            print(f"{Fore.YELLOW}Preparing files for LLM...{Style.RESET_ALL}")
-            logger.debug(f"Files to combine: {result['downloaded_files']}")
-            # Use parent page name for output file if available
-            parent_name = None
-            if 'selected_options' in result and 'parent_url' in result['selected_options']:
-                parent_url = result['selected_options']['parent_url']
-                # Try to extract a name from the parent_url
-                import re
-                match = re.search(r'/pages/\d+/([^/]+)$', parent_url)
-                if match:
-                    parent_name = match.group(1).replace('+', '_').replace('-', '_')
-            if not parent_name:
-                parent_name = 'ParentPage'
-            output_filename = f"LLM_Combined_{parent_name}.md"
-            print(f"{Fore.YELLOW}Calling LLM to combine files... This may take a while.{Style.RESET_ALL}")
-            logger.info(f"Calling OpenAI LLM with model: {llm_model or 'gpt-3.5-turbo'}")
-            llm_output_path = combine_files_with_llm(
-                result['downloaded_files'],
-                args.output_dir or 'confluence_pages',
-                openai_api_key,
-                model=llm_model or 'gpt-3.5-turbo',
-                output_filename=output_filename
-            )
-            if llm_output_path:
-                print(f"{Fore.GREEN}LLM-combined file saved to: {llm_output_path}{Style.RESET_ALL}")
-                logger.info(f"LLM-combined file saved to: {llm_output_path}")
+        logging.basicConfig(level=logging.INFO)
+        logger = logging.getLogger("llm_combine")
+        print(f"\n{Fore.CYAN}=== LLM Combining Files ==={Style.RESET_ALL}")
+        logger.info("Starting LLM combine process.")
+        print(f"{Fore.YELLOW}Preparing files for LLM...{Style.RESET_ALL}")
+        logger.debug(f"Files to combine: {result['downloaded_files']}")
+        # Use parent page name for output file if available
+        parent_name = None
+        if 'selected_options' in result and 'parent_url' in result['selected_options']:
+            parent_url = result['selected_options']['parent_url']
+            # Try to extract a name from the parent_url
+            match = re.search(r'/pages/\d+/([^/]+)$', parent_url)
+            if match:
+                parent_name = match.group(1).replace('+', '_').replace('-', '_')
+        if not parent_name:
+            parent_name = 'ParentPage'
+        # Use the directory containing the parent page's .md file for naming
+        parent_dir_part = None
+        if result.get('downloaded_files'):
+            output_dir = args.output_dir or 'confluence_pages'
+            # Find the most common subdirectory under 'Development' for this parent page's files
+            subdirs = []
+            for file_path in result['downloaded_files']:
+                rel_path = os.path.relpath(file_path, output_dir)
+                parts = rel_path.split(os.sep)
+                if 'Development' in parts:
+                    dev_idx = parts.index('Development')
+                    if dev_idx + 1 < len(parts):
+                        subdirs.append(parts[dev_idx + 1])
+                        logging.debug(f"[LLM Naming] File: {file_path} | rel_path: {rel_path} | subdir after 'Development': {parts[dev_idx + 1]}")
+                else:
+                    logging.debug(f"[LLM Naming] File: {file_path} | rel_path: {rel_path} | 'Development' not in path")
+            logging.info(f"[LLM Naming] Subdirectories found for parent page {idx if 'idx' in locals() else ''}: {subdirs}")
+            # Use the most common subdir, or fallback to parent_title
+            if subdirs:
+                from collections import Counter
+                section, count = Counter(subdirs).most_common(1)[0]
+                section_sanitized = re.sub(r'[^A-Za-z0-9]+', '_', section).strip('_')
+                logging.info(f"[LLM Naming] Most common subdirectory for parent page {idx if 'idx' in locals() else ''}: {section} (count: {count})")
+                output_filename = f"LLM_Combined_{section_sanitized}.md"
             else:
-                print(f"{Fore.RED}LLM combine failed. See logs for details.{Style.RESET_ALL}")
-                logger.error("LLM combine failed. No output file was created.")
+                logging.info(f"[LLM Naming] No subdirectory found for parent page {idx if 'idx' in locals() else ''}, using parent_title: {parent_name}")
+                output_filename = f"LLM_Combined_{parent_name}.md"
+            logging.info(f"[LLM Naming] Final output filename for parent page {idx if 'idx' in locals() else ''}: {output_filename}")
+        logging.info(f"[LLM Naming] Files sent to LLM for parent page {idx if 'idx' in locals() else ''}: {result['downloaded_files']}")
+        print(f"{Fore.YELLOW}Calling LLM to combine files... This may take a while.{Style.RESET_ALL}")
+        logger.info(f"Calling OpenAI LLM with model: {llm_model or 'gpt-3.5-turbo'}")
+        llm_output_path = combine_files_with_llm(
+            result['downloaded_files'],
+            args.output_dir or 'confluence_pages',
+            os.getenv('OPENAI_API_KEY'),
+            model=llm_model or 'gpt-3.5-turbo',
+            output_filename=output_filename
+        )
+        if llm_output_path:
+            print(f"{Fore.GREEN}LLM-combined file saved to: {llm_output_path}{Style.RESET_ALL}")
+            logger.info(f"LLM-combined file saved to: {llm_output_path}")
+        else:
+            print(f"{Fore.RED}LLM combine failed. See logs for details.{Style.RESET_ALL}")
+            logger.error("LLM combine failed. No output file was created.")
 
 if __name__ == "__main__":
     run() 
