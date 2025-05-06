@@ -1,5 +1,7 @@
 # Avetta Confluence Downloader
 
+> **A modern CLI tool to download, archive, and consolidate Confluence pages as Markdown, with advanced LLM-powered file combination.**
+> 
 > **IMPORTANT:** This script is tested and supported only on **Python 3.11** and **3.12**. Some dependencies (such as `lxml`) may not work on Python 3.13+ or older versions. Please use Python 3.12 or 3.11 for best compatibility.
 
 ---
@@ -9,16 +11,15 @@
 - [Key Features](#key-features)
 - [Python Version Compatibility](#python-version-compatibility)
 - [Project Structure](#project-structure)
-- [Code Architecture](#code-architecture)
-- [Quick Start](#quick-start)
-- [Using pyenv to Manage Python Versions](#using-pyenv-to-manage-python-versions)
-- [Configuration (.env)](#configuration-env)
-- [Usage](#usage)
-  - [Running from the Terminal](#running-from-the-terminal)
-  - [Running from an IDE](#running-from-an-ide-eg-pycharm-vscode)
-- [CLI Options](#cli-options)
+- [Configuration & Usage](#configuration--usage)
+  - [Configuration (.env)](#configuration-env)
+  - [Batch YAML Configuration (Multi-Parent Page Download)](#batch-yaml-configuration-multi-parent-page-download)
+  - [CLI Options](#cli-options)
+  - [Quick Start](#quick-start)
+  - [Example Workflows](#example-workflows)
 - [Output](#output)
-- [Example Workflows](#example-workflows)
+- [LLM Combine Feature](#llm-combine-feature)
+- [Logging Strategies](#logging-strategies)
 - [API Usage](#api-usage)
 - [Development & Contribution](#development--contribution)
 - [Troubleshooting](#troubleshooting)
@@ -28,20 +29,22 @@
 
 ## Overview
 
-**Avetta Confluence Downloader** downloads Confluence pages as Markdown files and generates a metrics report. It supports both command-line and interactive usage, making it ideal for archiving, documentation, or analysis of Confluence content.
+**Avetta Confluence Downloader** is a CLI tool for downloading Confluence pages as Markdown files, preserving hierarchy, and generating metrics reports. It supports both command-line and interactive usage, making it ideal for archiving, documentation, or analysis of Confluence content. Advanced features include batch downloads and LLM-powered file consolidation.
 
 ## Key Features
+
 - **Modern, Colorful CLI:** User prompts are colorized and clearly separated for a better terminal experience.
 - **Interactive Flow:** The script guides you through all required options, shows a summary, and asks for confirmation before running.
-- **Flexible Configuration:** Supports `.env`, command-line arguments, and interactive prompts.
+- **Flexible Configuration:** Supports `.env`, command-line arguments, YAML config, and interactive prompts.
+- **Batch Download:** Download multiple parent pages in one run using YAML config.
 - **Dry Run Mode:** Preview all actions (including overwrite logic) without writing any files.
 - **Overwrite Options:** Choose to overwrite, skip, increment, or decide for each file interactively.
 - **API Token Security:** API token is masked in all output/logs, and a warning is shown if passed as a CLI argument.
 - **Graceful Interrupts:** Cleanly handles `Ctrl+C` (KeyboardInterrupt).
 - **Concurrent Downloads:** Fast downloads with a thread pool (default: 10 threads).
-- **Pinned Dependencies:** All dependencies are version-pinned for reproducibility.
 
 ## Python Version Compatibility
+
 - **Supported:** Python 3.11 and 3.12 only.
 - **Why:** Some dependencies (notably `lxml`) may not install or work on Python 3.13+ or older versions.
 - **How to check:**
@@ -74,25 +77,55 @@ AvettaConfluenceDownloader/
 
 ---
 
-## Code Architecture
+## Configuration & Usage
 
-- **cli.py**: Handles all user interaction, argument parsing, and the CLI entry point. All prompts, printing, and user-facing output are centralized here. Prompts are colorized and separated for clarity.
-- **main.py**: Orchestrates the main workflow, delegates logic to modules, and returns results for the CLI to handle output. No user interaction or printing occurs here.
-- **config.py**: Handles environment variable and user config loading and validation. Provides helpers for prompting and retrieving configuration values.
-- **file_ops.py**: Handles all file and markdown operations, including filename sanitization, unique filename generation, markdown consolidation, and file path construction (via a utility function). No user interaction or printing occurs here.
-- **confluence_api.py**: Handles all Confluence API interactions, including page search, retrieval, and ID extraction. No user interaction or printing occurs here.
-- **constants.py**: Holds all default values, stub values, and user-facing messages. Centralizes configuration and strings for maintainability.
+This section covers how to configure and use the downloader, including environment variables, YAML batch config, CLI options, and example workflows.
 
-**Entry Point:**
-- Run the script using:
-  ```sh
-  python cli.py
-  ```
-  or, for advanced usage, import and call `main()` from `main.py` in your own scripts.
+### Configuration (.env)
+- Copy `.env.example` to `.env` and fill in your Confluence base URL, username, API token, and output directory.
+- Environment variables can be overridden by CLI arguments or YAML config.
 
----
+### Batch YAML Configuration (Multi-Parent Page Download)
 
-## Quick Start
+You can specify multiple parent pages in your `config.yaml` for batch processing. Use keys like `parent_url`, `parent_url2`, `parent_url3`, etc. The downloader will process each parent page in sequence, generating separate outputs for each.
+
+Example `config.yaml`:
+
+```yaml
+base_url: "https://your-domain.atlassian.net/wiki"
+username: "your.email@example.com"
+mode: "2"
+output_dir: "./confluence_pages"
+parent_url: "https://your-domain.atlassian.net/wiki/spaces/IT/pages/123456789/Workstation+Setup"
+parent_url2: "https://your-domain.atlassian.net/wiki/spaces/IT/pages/987654321/UI+Development"
+parent_url3: "https://your-domain.atlassian.net/wiki/spaces/IT/pages/192837465/BE+Development"
+llm_combine: true
+llm_model: "gpt-3.5-turbo"
+```
+
+Each parent page will be downloaded and, if `llm_combine` is enabled, a uniquely named combined file will be generated for each (e.g., `LLM_Combined_Workstation_Setup.md`).
+
+### CLI Options
+
+| Option           | Description                                              | Example/Values                        |
+|------------------|----------------------------------------------------------|---------------------------------------|
+| --base-url       | Confluence base URL                                      | https://your-domain.atlassian.net/wiki|
+| --username       | Confluence username/email                                | your.email@example.com                |
+| --mode           | Download mode                                            | 1 (entire space), 2 (by parent page)  |
+| --output-dir     | Output directory for downloaded files                    | ./confluence_pages                    |
+| --metrics-only   | Only generate metrics report (no page downloads)         | (flag)                                |
+| --parent-url     | Parent page URL (for mode 2)                             | https://.../pages/123456789/...       |
+| --space-key      | Space key (for mode 1)                                   | DEV                                   |
+| --dry-run        | Preview actions without writing files                    | (flag)                                |
+| --version        | Show script version and exit                             | (flag)                                |
+| --verbose        | Enable verbose (DEBUG) logging                           | (flag)                                |
+| --llm-combine    | Combine downloaded files using an LLM and save the result| (flag)                                |
+| --llm-model      | OpenAI LLM model to use for combining files              | gpt-3.5-turbo (default, free-tier), gpt-4.1 (gpt-4-1106-preview, NOT free), gpt-4o (NOT free), claude-3.5-sonnet (NOT free, Anthropic API key required) |
+
+- Any option not provided will be prompted for interactively, with colorized and clear prompts.
+- After all options are collected, a summary is shown and you must confirm before the script runs.
+
+### Quick Start
 
 1. **Install Python 3.12 or 3.11** (see [Python Version Compatibility](#python-version-compatibility)).
    - If you need to manage multiple Python versions, see [Using pyenv to Manage Python Versions](#using-pyenv-to-manage-python-versions).
@@ -116,100 +149,7 @@ AvettaConfluenceDownloader/
    ```
    - If you do not provide all required options as arguments or in your `.env`, the script will prompt you interactively with colorized prompts.
 
----
-
-## CLI Options
-
-| Option           | Description                                              | Example/Values                        |
-|------------------|----------------------------------------------------------|---------------------------------------|
-| --base-url       | Confluence base URL                                      | https://your-domain.atlassian.net/wiki|
-| --username       | Confluence username/email                                | your.email@example.com                |
-| --mode           | Download mode                                            | 1 (entire space), 2 (by parent page)  |
-| --output-dir     | Output directory for downloaded files                    | ./confluence_pages                    |
-| --metrics-only   | Only generate metrics report (no page downloads)         | (flag)                                |
-| --parent-url     | Parent page URL (for mode 2)                             | https://.../pages/123456789/...       |
-| --space-key      | Space key (for mode 1)                                   | DEV                                   |
-| --dry-run        | Preview actions without writing files                    | (flag)                                |
-| --version        | Show script version and exit                             | (flag)                                |
-| --verbose        | Enable verbose (DEBUG) logging                           | (flag)                                |
-| --llm-combine    | Combine downloaded files using an LLM and save the result         | (flag)                                |
-| --llm-model      | OpenAI LLM model to use for combining files                      | gpt-3.5-turbo (default, free-tier), gpt-4.1 (gpt-4-1106-preview, NOT free), gpt-4o (NOT free), claude-3.5-sonnet (NOT free, Anthropic API key required) |
-
-- Any option not provided will be prompted for interactively, with colorized and clear prompts.
-- After all options are collected, a summary is shown and you must confirm before the script runs.
-
----
-
-## LLM Combine Feature
-
-- **What it does:** Combines all downloaded Markdown files into a single, improved document using an LLM (OpenAI or Anthropic). The LLM is prompted to deduplicate, improve readability, create sections, and reorder information as needed.
-- **How to use:**
-  - Use the `--llm-combine` flag, or answer "yes" to the interactive prompt after download.
-  - The script will use your OpenAI API key (set `OPENAI_API_KEY` in your `.env` or environment) or Anthropic API key (for Claude).
-  - You can select the model with `--llm-model` or interactively. **Only `gpt-3.5-turbo` is free.**
-  - **Available models:**
-    - `gpt-3.5-turbo` (free, OpenAI)
-    - `gpt-4.1` (`gpt-4-1106-preview`, **NOT free**, OpenAI paid account required)
-    - `gpt-4o` (**NOT free**, OpenAI paid account required)
-    - `claude-3.5-sonnet` (**NOT free**, Anthropic API key required)
-  - The output file will be named after the parent page (e.g., `Parent_Page_combined.md`).
-  - The LLM prompt is:
-    > combine these files into 1. preserve all unique information. improve readability and flow. create sections and reorder information based on need and where applicable
-  - The script will print the path to the combined file after completion.
-- **Modular:** You can use the `llm_utils.combine_files_with_llm` function directly in your own scripts for automation:
-  ```python
-  from llm_utils import combine_files_with_llm
-  combined_path = combine_files_with_llm([
-      'file1.md', 'file2.md', ...
-  ], output_dir='.', api_key='sk-...', model='gpt-3.5-turbo', output_filename='Combined.md')
-  ```
-- **Warning:** Only `gpt-3.5-turbo` is free. All other models require a paid OpenAI or Anthropic account and the correct API key. You will be warned in the CLI if you select a non-free model.
-- **Troubleshooting:** If you see API errors, check your API key, model selection, and ensure you have not exceeded your OpenAI or Anthropic usage limits.
-
----
-
-## Output
-- Downloaded pages are saved as text/markdown files in the specified output directory, preserving the Confluence page hierarchy.
-- A metrics report (`metrics.md`) is generated summarizing the download (page count, metadata, etc.).
-- Optionally, you can consolidate all markdown files into a single document (`Consolidated.md`).
-- Logs are written to `confluence_downloader.log` for troubleshooting and auditing.
-- Progress is shown with modern progress bars (tqdm) and spinners for all major steps:
-  - Downloading pages
-  - Fetching data from the Confluence API
-  - Combining files with LLM (OpenAI)
-  - Writing output files
-  - All long-running steps provide visual feedback so you always know the script is working.
-- **Dry run mode** prints all actions that would be taken, including overwrite logic, without writing any files.
-- **At the end of the run, the CLI displays a summary of selected options and a list of all files that were downloaded (or would be downloaded in dry run mode).**
-
----
-
-## Logging
-
-- The script creates a log file (`confluence_downloader.log`) with detailed info and errors for troubleshooting.
-- All user-facing output is colorized and progress-aware for a modern CLI experience.
-
----
-
-## Dependencies
-
-All dependencies are pinned in `requirements.txt`:
-
-```
-openai>=1.77.0
-colorama>=0.4.6
-tqdm>=4.67.1
-beautifulsoup4>=4.12.3
-requests>=2.31.0
-lxml>=5.2.1
-python-dotenv==1.0.1
-```
-
-These cover all required features: OpenAI API, colored output, progress bars, HTML parsing, HTTP requests, and environment variable loading.
-
----
-
-## Example Workflows
+### Example Workflows
 
 - **Download all pages under a parent page (interactive):**
   ```sh
@@ -248,6 +188,77 @@ These cover all required features: OpenAI API, colored output, progress bars, HT
   python cli.py --mode 2 --parent-url "https://your-domain.atlassian.net/wiki/spaces/IT/pages/123456789/Parent+Page" --llm-combine
   ```
   (The combined file will be named after the parent page, e.g., `Parent_Page_combined.md`.)
+
+---
+
+## Output
+
+The script saves downloaded pages as Markdown files in the specified output directory, preserving the Confluence page hierarchy. A metrics report (`metrics.md`) is generated summarizing the download (page count, metadata, etc.). Optionally, you can consolidate all markdown files into a single document (`Consolidated.md`). Logs are written to `confluence_downloader.log` for troubleshooting and auditing. Progress is shown with modern progress bars (tqdm) and spinners for all major steps, so you always know the script is working. Dry run mode prints all actions that would be taken, including overwrite logic, without writing any files. At the end of the run, the CLI displays a summary of selected options and a list of all files that were downloaded (or would be downloaded in dry run mode).
+
+---
+
+## LLM Combine Feature
+
+> **Context:** The LLM Combine feature lets you merge all downloaded Markdown files for a parent page into a single, improved document using a Large Language Model (LLM) such as OpenAI's GPT or Anthropic's Claude. This is especially useful for creating a unified, readable knowledge base from multiple Confluence pages.
+
+**How to use:**
+- Use the `--llm-combine` flag, or answer "yes" to the interactive prompt after download.
+- You can also set `llm_combine: true` in your `config.yaml` for batch or automated runs.
+- The script will use your OpenAI API key (set `OPENAI_API_KEY` in your `.env` or environment) or Anthropic API key (for Claude).
+- You can select the model with `--llm-model` or interactively. **Only `gpt-3.5-turbo` is free.**
+- **Available models:**
+  - `gpt-3.5-turbo` (free, OpenAI)
+  - `gpt-4.1` (`gpt-4-1106-preview`, **NOT free**, OpenAI paid account required)
+  - `gpt-4o` (**NOT free**, OpenAI paid account required)
+  - `claude-3.5-sonnet` (**NOT free**, Anthropic API key required)
+- The output file will be named after the parent page or section (e.g., `LLM_Combined_Workstation_Setup.md`).
+- The script will print the path to the combined file after completion.
+
+**What happens under the hood:**
+When combining files, the script instructs the LLM to:
+- **Deduplicate:** Remove any duplicate information across the input files.
+- **Section:** Organize the content into logical sections, grouping related topics together.
+- **Reorder:** Rearrange content to improve the flow and ensure related information is presented together.
+- **Improve Readability:** Rewrite and restructure content for clarity and ease of reading.
+- **Preserve Unique Information:** Ensure all unique details from the original files are retained in the final output.
+
+These strategies help produce a single, comprehensive, and well-organized Markdown document from multiple Confluence pages.
+
+**LLM Prompt Used (example):**
+```
+combine these files into 1. preserve all unique information. improve readability and flow. create sections and reorder information based on need and where applicable
+```
+
+**Modular usage:**
+You can use the `llm_utils.combine_files_with_llm` function directly in your own scripts for automation:
+```python
+from llm_utils import combine_files_with_llm
+combined_path = combine_files_with_llm([
+    'file1.md', 'file2.md', ...
+], output_dir='.', api_key='sk-...', model='gpt-3.5-turbo', output_filename='Combined.md')
+```
+
+**Warning:** Only `gpt-3.5-turbo` is free. All other models require a paid OpenAI or Anthropic account and the correct API key. You will be warned in the CLI if you select a non-free model.
+
+**Troubleshooting:** If you see API errors, check your API key, model selection, and ensure you have not exceeded your OpenAI or Anthropic usage limits.
+
+---
+
+## Logging Strategies
+
+The downloader uses Python's `logging` module to provide detailed information about its operation. Logging levels can be controlled with the `--verbose` flag or by configuring the logger in your own scripts.
+
+### Key Logging Features:
+- **Download Progress:** Logs each page being saved, converted, or if any errors occur.
+- **Batch Processing:** Logs which parent page is being processed in batch mode.
+- **LLM Combine Naming:**
+  - Logs each file considered for LLM combination, its relative path, and the subdirectory after `Development`.
+  - Logs the list of subdirectories found for each parent page.
+  - Logs the most common subdirectory and the final output filename chosen for the LLM-combined file.
+  - If no subdirectory is found, logs fallback to the parent page title.
+- **API Requests:** Logs HTTP requests to the LLM API and their responses.
+
+**Tip:** For the most detailed output, set the logging level to `DEBUG`.
 
 ---
 
