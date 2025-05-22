@@ -14,6 +14,7 @@ import yaml
 import re
 import os
 import pprint
+from log_parser import search_logs
 
 def get_args():
     """
@@ -35,9 +36,10 @@ def get_args():
         choices=['gpt-3.5-turbo', 'gpt-4-1106-preview', 'gpt-4o', 'claude-3.5-sonnet'],
         default='gpt-3.5-turbo',
         help='LLM model to use for combining files (default: gpt-3.5-turbo). gpt-4.1, gpt-4o, and Claude 3.5 Sonnet are not free.')
-    parser.add_argument('--llm-overwrite-mode', choices=['overwrite', 'increment'], default='overwrite', help='LLM combine file overwrite mode: overwrite (default) or increment (add number if file exists)')
+    parser.add_argument('--llm-overwrite-mode', choices=['overwrite', 'increment'], help='LLM combine file overwrite mode: overwrite or increment (add number if file exists)')
     parser.add_argument('--version', action='version', version='%(prog)s 1.0.0', help='Show version and exit')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose (DEBUG) logging')
+    parser.add_argument('--parse-logs', action='store_true', help='Parse and search logs using the built-in log parser')
     return parser.parse_args()
 
 def prompt_with_validation(prompt: str, valid_options=None, default=None, allow_blank=False) -> str:
@@ -69,6 +71,89 @@ def run():
     Main CLI flow: prompts the user for all required options, shows a summary, and displays results.
     Handles all user interaction and output for the Confluence Downloader.
     """
+    # Main feature selection menu
+    print(f"{Fore.CYAN}\n=== Main Menu ==={Style.RESET_ALL}")
+    while True:
+        main_choice = prompt_with_validation(
+            "Main Menu (use arrow keys to select):",
+            valid_options=["Run Confluence Downloader", "Parse/Search Logs", "Exit"],
+            default="Run Confluence Downloader"
+        )
+        if main_choice == "Parse/Search Logs":
+            print(f"{Fore.CYAN}\n=== Log Parsing Mode ==={Style.RESET_ALL}")
+            default_log_file = 'confluence_downloader.log'
+            log_file = input(f"{Fore.YELLOW}Enter path to log file [default: {default_log_file}]: {Style.RESET_ALL}").strip() or default_log_file
+            filters = {'level': None, 'feature': None, 'api': None, 'keyword': None}
+            while True:
+                filter_choice = prompt_with_validation(
+                    "Log Filter Options (use arrow keys to select):",
+                    valid_options=[
+                        "Log level" + (f" (current: {filters['level']})" if filters['level'] else ""),
+                        "Feature tag" + (f" (current: {filters['feature']})" if filters['feature'] else ""),
+                        "API call" + (f" (current: {filters['api']})" if filters['api'] else ""),
+                        "Keyword" + (f" (current: {filters['keyword']})" if filters['keyword'] else ""),
+                        "Run log search with current filters",
+                        "Return to Main Menu"
+                    ],
+                    default="Run log search with current filters"
+                )
+                if filter_choice.startswith("Log level"):
+                    filters['level'] = input(f"{Fore.YELLOW}Enter log level (INFO, WARNING, ERROR, etc.) or leave blank to clear: {Style.RESET_ALL}").strip() or None
+                elif filter_choice.startswith("Feature tag"):
+                    filters['feature'] = input(f"{Fore.YELLOW}Enter feature tag (e.g., LLM Combine, Download) or leave blank to clear: {Style.RESET_ALL}").strip() or None
+                elif filter_choice.startswith("API call"):
+                    filters['api'] = input(f"{Fore.YELLOW}Enter API call keyword (e.g., JIRA, Confluence) or leave blank to clear: {Style.RESET_ALL}").strip() or None
+                elif filter_choice.startswith("Keyword"):
+                    filters['keyword'] = input(f"{Fore.YELLOW}Enter keyword to search for or leave blank to clear: {Style.RESET_ALL}").strip() or None
+                elif filter_choice == "Run log search with current filters":
+                    print(f"{Fore.CYAN}\n=== Log Search Results (filters: {filters}) ==={Style.RESET_ALL}")
+                    search_logs(log_file, level=filters['level'], feature=filters['feature'], api=filters['api'], keyword=filters['keyword'])
+                    print(f"{Fore.CYAN}\n--- End of Results ---{Style.RESET_ALL}")
+                elif filter_choice == "Return to Main Menu":
+                    break
+        elif main_choice == "Exit":
+            print(f"{Fore.YELLOW}Exiting.{Style.RESET_ALL}")
+            sys.exit(0)
+        else:
+            break
+    # Continue with downloader as before
+    args = get_args()
+    if getattr(args, 'parse_logs', False):
+        print(f"{Fore.CYAN}\n=== Log Parsing Mode ==={Style.RESET_ALL}")
+        default_log_file = 'confluence_downloader.log'
+        log_file = input(f"{Fore.YELLOW}Enter path to log file [default: {default_log_file}]: {Style.RESET_ALL}").strip() or default_log_file
+        # Main log parsing submenu
+        print(f"{Fore.CYAN}\n--- Log Filter Options ---{Style.RESET_ALL}")
+        filters = {'level': None, 'feature': None, 'api': None, 'keyword': None}
+        while True:
+            print(f"{Fore.YELLOW}Select a filter to set or run the search:{Style.RESET_ALL}")
+            print("  1. Log level" + (f" (current: {filters['level']})" if filters['level'] else ""))
+            print("  2. Feature tag" + (f" (current: {filters['feature']})" if filters['feature'] else ""))
+            print("  3. API call" + (f" (current: {filters['api']})" if filters['api'] else ""))
+            print("  4. Keyword" + (f" (current: {filters['keyword']})" if filters['keyword'] else ""))
+            print("  5. Run log search with current filters")
+            print("  6. Exit log parser")
+            choice = prompt_with_validation(
+                f"{Fore.YELLOW}Enter 1, 2, 3, 4, 5, or 6:{Style.RESET_ALL}",
+                valid_options=['1', '2', '3', '4', '5', '6'],
+                default='5'
+            )
+            if choice == '1':
+                filters['level'] = input(f"{Fore.YELLOW}Enter log level (INFO, WARNING, ERROR, etc.) or leave blank to clear: {Style.RESET_ALL}").strip() or None
+            elif choice == '2':
+                filters['feature'] = input(f"{Fore.YELLOW}Enter feature tag (e.g., LLM Combine, Download) or leave blank to clear: {Style.RESET_ALL}").strip() or None
+            elif choice == '3':
+                filters['api'] = input(f"{Fore.YELLOW}Enter API call keyword (e.g., JIRA, Confluence) or leave blank to clear: {Style.RESET_ALL}").strip() or None
+            elif choice == '4':
+                filters['keyword'] = input(f"{Fore.YELLOW}Enter keyword to search for or leave blank to clear: {Style.RESET_ALL}").strip() or None
+            elif choice == '5':
+                print(f"{Fore.CYAN}\n=== Log Search Results (filters: {filters}) ==={Style.RESET_ALL}")
+                search_logs(log_file, level=filters['level'], feature=filters['feature'], api=filters['api'], keyword=filters['keyword'])
+                print(f"{Fore.CYAN}\n--- End of Results ---{Style.RESET_ALL}")
+            elif choice == '6':
+                print(f"{Fore.YELLOW}Exiting log parser.{Style.RESET_ALL}")
+                sys.exit(0)
+
     # Prompt for config file automation FIRST
     use_config = prompt_with_validation(
         f"{Fore.YELLOW}Run from config file? (y/n){Style.RESET_ALL}",
@@ -266,8 +351,6 @@ def run():
             print(f"{Fore.RED}Failed to load config file: {e}{Style.RESET_ALL}")
             sys.exit(1)
 
-    args = get_args()
-
     # Prompt for mode if not provided
     if not args.mode:
         print(f"{Fore.CYAN}\n=== Download Mode Selection ===\n{Style.RESET_ALL}")
@@ -294,22 +377,18 @@ def run():
         )
         args.dry_run = (dry_run_input == 'y')
 
-    # Prompt for overwrite options for file downloads if not dry-run or metrics-only
-    if not args.dry_run and not args.metrics_only:
+    # Prompt for overwrite options for file downloads if not set
+    if getattr(args, 'overwrite_mode', None) in (None, ''):
         print(f"{Fore.CYAN}\n=== Overwrite Options for File Downloads ===\n{Style.RESET_ALL}")
         overwrite_choice = prompt_with_validation(
             f"{Fore.YELLOW}{BATCH_PROMPT}\nEnter 1, 2, 3, or 4{Style.RESET_ALL}",
             valid_options=['1', '2', '3', '4'],
             default='1'
         )
-        # Map user choice to a string for main()
         overwrite_map = {'1': 'overwrite', '2': 'skip', '3': 'ask', '4': 'increment'}
         args.overwrite_mode = overwrite_map[overwrite_choice]
-    else:
-        args.overwrite_mode = 'overwrite'
-
-    # Prompt for LLM combine overwrite mode if LLM combine is enabled
-    if getattr(args, 'llm_combine', False):
+    # Prompt for LLM combine overwrite mode if LLM combine is enabled and not set
+    if getattr(args, 'llm_combine', False) and getattr(args, 'llm_overwrite_mode', None) in (None, ''):
         print(f"{Fore.CYAN}\n=== Overwrite Options for LLM Combined File ===\n{Style.RESET_ALL}")
         llm_overwrite_choice = prompt_with_validation(
             f"{Fore.YELLOW}How should the LLM combined file be saved if a file with the same name exists?\n  1. Overwrite the existing combined file\n  2. Increment the filename (e.g., LLM_Combined_XYZ_2.md)\nEnter 1 or 2 [default: 1]:{Style.RESET_ALL}",
@@ -318,7 +397,8 @@ def run():
         )
         llm_overwrite_map = {'1': 'overwrite', '2': 'increment'}
         args.llm_overwrite_mode = llm_overwrite_map[llm_overwrite_choice]
-    else:
+    # If still not set, default to 'overwrite'
+    if getattr(args, 'llm_overwrite_mode', None) in (None, ''):
         args.llm_overwrite_mode = 'overwrite'
 
     # Print summary and confirm
@@ -494,6 +574,15 @@ def run():
         else:
             print(f"{Fore.RED}LLM combine failed. See logs for details.{Style.RESET_ALL}")
             logger.error("LLM combine failed. No output file was created.")
+
+    # Prompt for all required options (if not set by YAML/CLI/env)
+    prompt_mode(args) if not args.mode else None
+    prompt_parent_url(args) if args.mode == '2' and not args.parent_url else None
+    prompt_dry_run(args) if getattr(args, 'dry_run', None) is None else None
+    # Advanced Options submenu
+    from cli_helpers import prompt_advanced_options
+    prompt_advanced_options(args)
+    prompt_file_overwrite_mode(args) if getattr(args, 'overwrite_mode', None) in (None, '') else None
 
 if __name__ == "__main__":
     run() 

@@ -19,6 +19,7 @@
   - [Example Workflows](#example-workflows)
 - [Output](#output)
 - [LLM Combine Feature](#llm-combine-feature)
+- [Example: LLM_Combined UI Development Documentation](#example-llm-combined-ui-development-documentation)
 - [Logging Strategies](#logging-strategies)
 - [API Usage](#api-usage)
 - [Development & Contribution](#development--contribution)
@@ -248,6 +249,28 @@ combined_path = combine_files_with_llm([
 ```
 
 **Warning:** Only `gpt-3.5-turbo` is free. All other models require a paid OpenAI or Anthropic account and the correct API key. You will be warned in the CLI if you select a non-free model.
+
+---
+
+## Example: LLM_Combined UI Development Documentation
+
+The LLM Combine feature can be used to generate comprehensive technical documentation for specific domains or projects. For example, the file [`confluence_pages/LLM_Combined_UI_Development.md`](confluence_pages/LLM_Combined_UI_Development.md) is an AI-generated, consolidated document that summarizes and organizes all Confluence content related to UI Development.
+
+### What does this file contain?
+- **FormDetails**: Describes the state, initialization, messages, and view logic for the FormDetails component, including workflow actions, file fetching, and event listeners.
+- **FormBuilder**: Documents the initialization, status management, category sorting/filtering, audit-specific logic, and key messages for the FormBuilder component, including UI interactions like date pickers and category accordions.
+- **Usage**: These sections are especially useful for onboarding, technical reference, or as a single source of truth for engineers working on the UI platform.
+
+### General Pattern
+- Each `LLM_Combined_*.md` file in the `confluence_pages/` directory is named after the parent Confluence page or domain (e.g., `UI_Development`, `BE_Development`, `Workstation_Setup`).
+- These files are produced by the LLM Combine feature and serve as unified, readable documentation for their respective areas.
+- The content is deduplicated, reorganized, and improved for clarity by the LLM, making it more accessible than raw Confluence exports.
+
+### More Examples
+- [`confluence_pages/LLM_Combined_BE_Development.md`](confluence_pages/LLM_Combined_BE_Development.md): Backend engineering guild notes, best practices, and standards.
+- [`confluence_pages/LLM_Combined_Workstation_Setup.md`](confluence_pages/LLM_Combined_Workstation_Setup.md): Developer workstation setup and onboarding instructions.
+
+For more details, see the individual files in the `confluence_pages/` directory.
 
 ---
 

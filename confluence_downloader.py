@@ -18,6 +18,14 @@ from dotenv import load_dotenv
 from tqdm import tqdm
 import sys
 from itertools import cycle
+from cli_helpers import print_section, main_menu, select_mode, spinner, prompt_with_validation, prompt_space_key, run_cli_main_menu
+import json
+import time
+import threading
+import math
+from yaspin import yaspin
+import asyncio
+import httpx
 
 if not (sys.version_info.major == 3 and sys.version_info.minor in (11, 12)):
     print("""
@@ -47,7 +55,7 @@ def get_args():
     parser = argparse.ArgumentParser(description="Confluence Downloader")
     parser.add_argument('--base-url', help='Confluence base URL')
     parser.add_argument('--username', help='Confluence username/email')
-    parser.add_argument('--mode', choices=['1', '2'], help='1: entire space, 2: by parent page')
+    parser.add_argument('--mode', choices=['1', '2', '3', '4'], help='1: entire space, 2: by parent page, 3: search by title, 4: generate space structure report only')
     parser.add_argument('--output-dir', help='Output directory')
     parser.add_argument('--metrics-only', action='store_true', help='Generate metrics report only')
     parser.add_argument('--parent-url', help='Parent page URL (for mode 2)')
@@ -55,6 +63,13 @@ def get_args():
     parser.add_argument('--dry-run', action='store_true', help='Dry run mode')
     parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}', help='Show version and exit')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose (DEBUG) logging')
+    # New CLI options for crawling
+    parser.add_argument('--batch-size', type=int, default=20, help='Batch size for crawling (default: 20)')
+    parser.add_argument('--threads', type=int, default=8, help='Number of threads for crawling (default: 8)')
+    parser.add_argument('--label-filter', type=str, nargs='*', help='Only include pages with these labels (space separated)')
+    parser.add_argument('--title-filter', type=str, help='Only include pages with this substring in the title')
+    parser.add_argument('--page-type-filter', type=str, help='Only include pages of this type (e.g., page, blogpost)')
+    parser.add_argument('--output-format', type=str, choices=['md', 'json', 'both'], default='md', help='Output format for space structure report (md, json, or both). Default: md')
     return parser.parse_args()
 
 # === Interactive Credential Prompt ===
@@ -319,33 +334,364 @@ def save_page(page, output_dir, overwrite_mode="overwrite"):
         logging.error(f"Failed to save page '{title}': {e}")
         return False
 
-def prompt_with_validation(prompt: str, valid_options=None, default=None, allow_blank=False) -> str:
+def get_env_or_prompt(var, prompt, default=None, is_secret=False, stub_values=None):
     """
-    Prompt the user for input, validate against valid_options, and handle defaults.
+    Get a value from the environment or prompt the user if missing or stubbed.
+    stub_values: list of values that are considered placeholders and should trigger a prompt.
     """
-    while True:
-        if default is not None:
-            user_input = input(f"{prompt} [default: {default}]: ").strip()
-            if not user_input:
-                user_input = default
+    value = os.getenv(var)
+    if value is not None:
+        value = value.strip()
+    if not value or (stub_values and value in stub_values):
+        if is_secret:
+            value = getpass.getpass(f"{prompt}: ").strip()
         else:
-            user_input = input(f"{prompt}: ").strip()
-        if allow_blank and user_input == '':
-            return user_input
-        if valid_options is None or user_input in valid_options:
-            return user_input
-        print(f"{Fore.RED}Invalid selection. Please enter one of: {', '.join(valid_options)}{Style.RESET_ALL}")
+            if default:
+                value = input(f"{prompt} [default: {default}]: ").strip() or default
+            else:
+                value = input(f"{prompt}: ").strip()
+    return value
 
-# === Download and Progress ===
-def download_pages_concurrent(pages, output_dir, dry_run=False):
-    """Download pages concurrently with tqdm progress bar and dry run support."""
+def mask_token(token):
+    if not token or len(token) < 8:
+        return '***'
+    return token[:2] + '*' * (len(token) - 6) + token[-4:]
+
+async def get_page_metadata_with_retry_async(base_url, auth, page_id, timeout=10, max_retries=3, client=None):
+    """Async fetch page metadata with timeout and retry logic using httpx."""
+    url = f"{base_url}/rest/api/content/{page_id}"
+    params = {'expand': 'ancestors,title,version,metadata.labels'}
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = await client.get(url, params=params, auth=auth, timeout=timeout)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            if attempt == max_retries:
+                return None
+            await asyncio.sleep(1.5 * attempt)  # Exponential backoff
+
+def preflight_api_check(base_url, auth):
+    """Check API token/session health before crawling."""
+    try:
+        resp = requests.get(f"{base_url}/rest/api/space", auth=auth, timeout=10)
+        resp.raise_for_status()
+        return True
+    except Exception as e:
+        print_section(f"API health check failed: {e}")
+        return False
+
+async def crawl_and_report_space_async(
+    base_url, auth, space_key, output_dir, batch_size=20, max_workers=8, label_filter=None, title_filter=None, page_type_filter=None, output_format='md'
+):
+    import os
+    from tqdm.asyncio import tqdm as tqdm_async
+    from cli_helpers import print_section, spinner
+    import json
+    import time
+    from colorama import Fore, Style
+    import math
+    from yaspin import yaspin
+    # Create output subdirectories
+    reports_dir = "reports"
+    cache_dir = "cache"
+    os.makedirs(reports_dir, exist_ok=True)
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_path = os.path.join(cache_dir, f"{space_key}_crawl_cache.json")
+    report_path = os.path.join(reports_dir, f"space_{space_key}_structure.md")
+    json_path = os.path.join(reports_dir, f"space_{space_key}_structure.json")
+    error_log_path = os.path.join(cache_dir, f"space_{space_key}_crawl_errors.log")
+    toc = []
+    # Pre-flight API check (sync for now)
+    if not preflight_api_check(base_url, auth):
+        print_section("Aborting crawl due to failed API health check.")
+        return
+    # Load cache
+    if os.path.exists(cache_path):
+        with open(cache_path, "r", encoding="utf-8") as f:
+            cache = json.load(f)
+        processed_ids = set(cache.get("processed_ids", []))
+        print_section(f"Resuming crawl: {len(processed_ids)} pages already processed.")
+    else:
+        processed_ids = set()
+        cache = {"processed_ids": []}
+    # Error log
+    error_log = []
+    if os.path.exists(error_log_path):
+        with open(error_log_path, "r", encoding="utf-8") as f:
+            error_log = [line.strip() for line in f.readlines()]
+    # Fetch all pages (sync for now)
+    with spinner("Fetching all pages in space (GET only)...") as spin:
+        pages = get_all_pages_in_space(base_url, auth, space_key)
     if not pages:
-        print(f"{Fore.YELLOW}No pages to download.{Style.RESET_ALL}")
+        print_section(f"No pages found in space {space_key}.")
+        return
+    # Apply filters to initial list if needed (for efficiency)
+    def page_matches(page):
+        if label_filter:
+            labels = [l['name'].lower() for l in page.get('metadata', {}).get('labels', {}).get('results', [])]
+            if not any(lf in labels for lf in label_filter):
+                return False
+        if title_filter:
+            if title_filter.lower() not in page.get('title', '').lower():
+                return False
+        if page_type_filter:
+            if page.get('type', '').lower() != page_type_filter.lower():
+                return False
+        return True
+    filtered_pages = [p for p in pages if page_matches(p)]
+    print_section(f"Filter summary: {len(filtered_pages)} pages matched filters out of {len(pages)} total.")
+    if not filtered_pages:
+        print_section("No pages matched the provided filters. Exiting.")
+        return
+    # Build parent/child tree from filtered pages
+    children = {}
+    roots = []
+    filtered_ids = set(p['id'] for p in filtered_pages)
+    for page in filtered_pages:
+        ancestors = [a for a in page.get('ancestors', []) if a.get('id') in filtered_ids]
+        if ancestors:
+            parent_id = ancestors[-1]['id']
+            children.setdefault(parent_id, []).append(page)
+        else:
+            roots.append(page)
+    # Print and log directories (root and each child path)
+    def print_and_log_dir(page, level=0, path=None):
+        if path is None:
+            path = []
+        title = page.get('title', 'Untitled')
+        new_path = path + [title]
+        dir_path = '/'.join(new_path)
+        print(f"{Fore.CYAN}Crawling directory: {dir_path}{Style.RESET_ALL}")
+        logging.info(f"Crawling directory: {dir_path}")
+        for child in children.get(page['id'], []):
+            print_and_log_dir(child, level+1, new_path)
+    for root in roots:
+        print_and_log_dir(root)
+    # Flatten all pages in a list for batch processing
+    all_page_ids = [page['id'] for page in filtered_pages]
+    to_process = [pid for pid in all_page_ids if pid not in processed_ids]
+    processed_count = len(processed_ids)
+    page_metadata = {}  # id -> metadata dict
+    # Helper to build JSON tree (only for processed pages)
+    def build_json_tree(page):
+        if page['id'] not in processed_ids:
+            return None
+        meta = page_metadata.get(page['id'], {})
+        node = {
+            'id': page['id'],
+            'title': page.get('title', 'Untitled'),
+            'url': f"{base_url}/pages/{page['id']}",
+            'updated': meta.get('updated', 'N/A'),
+            'last_viewed': meta.get('last_viewed', 'N/A'),
+            'created': meta.get('created', 'N/A'),
+            'author': meta.get('author', 'N/A'),
+            'labels': meta.get('labels', 'None'),
+            'type': meta.get('type', 'page'),
+            'parent_id': page['ancestors'][-1]['id'] if page.get('ancestors') else None,
+            'ancestor_ids': [a['id'] for a in page.get('ancestors', [])],
+            'version': meta.get('version', 'N/A'),
+            'num_comments': meta.get('num_comments', 0),
+            'num_attachments': meta.get('num_attachments', 0),
+            'children': []
+        }
+        for child in children.get(page['id'], []):
+            child_node = build_json_tree(child)
+            if child_node:
+                node['children'].append(child_node)
+        return node
+    # Helper to print a mini tree preview in CLI
+    def print_tree_preview(page, level=0, max_depth=2, max_lines=10, lines=None):
+        if lines is None:
+            lines = []
+        if len(lines) >= max_lines or level > max_depth:
+            return lines
+        indent = '  ' * level
+        meta = page_metadata.get(page['id'], {})
+        title = page.get('title', 'Untitled')
+        preview = f"{indent}{Fore.GREEN if page['id'] in processed_ids else Fore.YELLOW}- {title}{Style.RESET_ALL}"
+        if meta:
+            preview += f" {Fore.CYAN}[{meta.get('author', 'N/A')}, {meta.get('updated', 'N/A')}, {meta.get('labels', 'None')}] {Style.RESET_ALL}"
+        lines.append(preview)
+        for child in children.get(page['id'], []):
+            print_tree_preview(child, level+1, max_depth, max_lines, lines)
+        return lines
+    # Helper to write the tree structure as Markdown
+    def write_tree_md(f, page, level=0):
+        indent = "  " * level
+        title = page.get('title', 'Untitled')
+        url = page.get('_links', {}).get('webui', '')
+        # If webui link is present, make it a Markdown link
+        if url:
+            # If base_url ends with /wiki, remove /wiki for webui links
+            base = base_url[:-5] if base_url.endswith('/wiki') else base_url
+            full_url = base + url
+            f.write(f"{indent}- [{title}]({full_url})\n")
+        else:
+            f.write(f"{indent}- {title}\n")
+        for child in children.get(page['id'], []):
+            write_tree_md(f, child, level+1)
+    # Main batch loop
+    start_time = time.time()
+    batch_times = []
+    try:
+        async with httpx.AsyncClient(http2=True) as client:
+            total_pages = len(all_page_ids)
+            pbar = tqdm_async(total=total_pages, initial=processed_count, desc="Crawling pages (async)")
+            while to_process:
+                batch = to_process[:batch_size]
+                batch_start = time.time()
+                successes, failures = 0, 0
+                live_preview_lines = []
+                file_results = []
+                tasks = []
+                for pid in batch:
+                    tasks.append(get_page_metadata_with_retry_async(base_url, auth, pid, client=client))
+                results = await asyncio.gather(*tasks)
+                for idx, result in enumerate(results):
+                    pid = batch[idx]
+                    page_title = next((p['title'] for p in filtered_pages if p['id'] == pid), pid)
+                    with yaspin(text=f"Processing: {page_title}", color="yellow") as file_spin:
+                        if result is not None:
+                            meta = {
+                                'updated': result.get('version', {}).get('when', 'N/A')[:10],
+                                'last_viewed': result.get('history', {}).get('lastViewed', {}).get('when', 'N/A')[:10] if result.get('history', {}).get('lastViewed') else 'N/A',
+                                'created': result.get('history', {}).get('createdDate', 'N/A')[:10] if result.get('history', {}).get('createdDate') else 'N/A',
+                                'author': result.get('version', {}).get('by', {}).get('displayName', 'N/A'),
+                                'labels': ', '.join([l['name'] for l in result.get('metadata', {}).get('labels', {}).get('results', [])]) or 'None',
+                                'type': result.get('type', 'page'),
+                                'version': result.get('version', {}).get('number', 'N/A'),
+                                'num_comments': result.get('metadata', {}).get('properties', {}).get('comments', {}).get('count', 0),
+                                'num_attachments': result.get('metadata', {}).get('properties', {}).get('attachments', {}).get('count', 0),
+                            }
+                            # Apply filters (should be redundant, but double check)
+                            if label_filter and not any(lf in meta['labels'].lower() for lf in label_filter):
+                                file_spin.write(f"{Fore.YELLOW}Skipped (label filter): {page_title}{Style.RESET_ALL}")
+                                file_spin.ok("⏭️ ")
+                                continue
+                            if title_filter and title_filter.lower() not in result.get('title', '').lower():
+                                file_spin.write(f"{Fore.YELLOW}Skipped (title filter): {page_title}{Style.RESET_ALL}")
+                                file_spin.ok("⏭️ ")
+                                continue
+                            if page_type_filter and meta['type'].lower() != page_type_filter.lower():
+                                file_spin.write(f"{Fore.YELLOW}Skipped (type filter): {page_title}{Style.RESET_ALL}")
+                                file_spin.ok("⏭️ ")
+                                continue
+                            page_metadata[pid] = meta
+                            processed_ids.add(pid)
+                            successes += 1
+                            pbar.update(1)
+                            processed_count += 1
+                            # Live preview line
+                            live_preview_lines.append(f"{Fore.GREEN}{result.get('title', 'Untitled')}{Style.RESET_ALL} | 🕒 {meta['updated']} | 👤 {meta['author']} | 🏷️ {meta['labels']}")
+                        else:
+                            failures += 1
+                            error_log.append(f"{pid}: Failed to fetch after retries.")
+                            with open(error_log_path, "a", encoding="utf-8") as ef:
+                                ef.write(f"{pid}: Failed to fetch after retries.\n")
+                            file_spin.fail("❌ ")
+                            file_spin.write(f"{Fore.RED}Failed: {page_title}{Style.RESET_ALL}")
+                # Routinely write progress to cache after each batch
+                cache["processed_ids"] = list(processed_ids)
+                cache["page_metadata"] = page_metadata
+                try:
+                    with open(cache_path, "w", encoding="utf-8") as f:
+                        json.dump(cache, f)
+                except Exception as e:
+                    print_section(f"Error writing crawl cache: {e}")
+                    logging.error(f"Error writing crawl cache: {e}")
+                # Update report (Markdown)
+                if output_format in ('md', 'both'):
+                    with open(report_path, "w", encoding="utf-8") as f:
+                        f.write(f"# 📚 Confluence Space Structure: {space_key}\n\n")
+                        summary = (
+                            f"**Total pages:** {len(pages)}  "
+                            f"**Filtered pages:** {len(filtered_pages)}  "
+                            f"**Root pages:** {len(roots)}\n\n"
+                        )
+                        f.write(summary)
+                        print_section(summary.strip())
+                        logging.info(summary.strip())
+                        # --- Metadata Table ---
+                        f.write("## 📊 Page Metadata Table\n\n")
+                        headers = [
+                            "ID", "Title", "URL", "Created", "Updated", "Last Viewed", "Version", "Comments", "Attachments", "Parent ID", "Ancestor IDs"
+                        ]
+                        f.write("| " + " | ".join(f"**{h}**" for h in headers) + " |\n")
+                        f.write("|" + "---|" * len(headers) + "\n")
+                        for pid, meta in page_metadata.items():
+                            title = meta.get('title') or next((p['title'] for p in filtered_pages if p['id'] == pid), 'Untitled')
+                            url = f"[{title}](https://{base_url.split('//')[-1]}/pages/{pid})"
+                            created = meta.get('created', 'N/A')
+                            updated = meta.get('updated', 'N/A')
+                            last_viewed = meta.get('last_viewed', 'N/A')
+                            version = meta.get('version', 'N/A')
+                            comments = meta.get('num_comments', 0)
+                            attachments = meta.get('num_attachments', 0)
+                            parent_id = meta.get('parent_id', 'N/A')
+                            ancestor_ids = ','.join(str(a) for a in meta.get('ancestor_ids', []))
+                            row = [
+                                pid,
+                                title,
+                                url,
+                                created,
+                                updated,
+                                last_viewed,
+                                str(version),
+                                str(comments),
+                                str(attachments),
+                                str(parent_id),
+                                ancestor_ids
+                            ]
+                            f.write("| " + " | ".join(row) + " |\n")
+                        f.write("\n---\n\n")
+                        f.write("## Table of Contents\n" + '\n'.join(toc) + '\n---\n')
+                        for root in roots:
+                            write_tree_md(f, root)
+                    print_section(f"Space structure report written to {report_path}. Crawl complete!")
+                    logging.info(f"Space structure report written to {report_path}")
+                # Update report (JSON)
+                if output_format in ('json', 'both'):
+                    json_tree = [build_json_tree(root) for root in roots if build_json_tree(root)]
+                    with open(json_path, "w", encoding="utf-8") as jf:
+                        json.dump(json_tree, jf, indent=2)
+                    print_section(f"JSON structure report written to {json_path}. Crawl complete!")
+                    logging.info(f"JSON structure report written to {json_path}")
+                # Feedback
+                batch_time = time.time() - batch_start
+                batch_times.append(batch_time)
+                elapsed = time.time() - start_time
+                remaining = len(all_page_ids) - processed_count
+                avg_batch_time = sum(batch_times) / len(batch_times) if batch_times else 0
+                avg_page_time = (sum(batch_times) / (processed_count or 1)) if processed_count else 0
+                eta_batches = avg_batch_time * (math.ceil(remaining / batch_size))
+                eta_pages = avg_page_time * remaining
+                print_section(f"Processed {processed_count}/{len(all_page_ids)}. Remaining: {remaining}. Batch time: {batch_time:.1f}s. ETA: {eta_batches/60:.1f} min (batch), {eta_pages/60:.1f} min (page). Successes: {successes}, Failures: {failures}")
+                # Show a mini tree preview (up to 10 lines, 2 levels deep)
+                preview_lines = []
+                for root in roots:
+                    preview_lines += print_tree_preview(root, max_depth=2, max_lines=10-len(preview_lines))
+                    if len(preview_lines) >= 10:
+                        break
+                print("\n".join(preview_lines))
+                to_process = [pid for pid in all_page_ids if pid not in processed_ids]
+            if output_format in ('md', 'both'):
+                print_section(f"Space structure report written to {report_path}. Crawl complete!")
+            if output_format in ('json', 'both'):
+                print_section(f"JSON structure report written to {json_path}. Crawl complete!")
+    except KeyboardInterrupt:
+        print_section("Crawl interrupted. Progress saved. You can resume by running again.")
+        return
+
+def download_pages_concurrent(pages, output_dir, dry_run=False):
+    """Download pages concurrently with tqdm progress bar and dry run support, with spinner for each file."""
+    if not pages:
+        print_section("No pages to download.")
         logging.warning("No pages to download.")
         return
     failed = []
     total = len(pages)
-    print(f"\nStarting download of {total} pages...")
+    print_section(f"Starting download of {total} pages...")
     existing_files = set()
     for root, _, files in os.walk(output_dir):
         for f in files:
@@ -365,17 +711,20 @@ def download_pages_concurrent(pages, output_dir, dry_run=False):
 
     # Batch overwrite/skip/increment prompt
     if files_to_overwrite and not dry_run:
-        print(f"{Fore.YELLOW}Warning: {len(files_to_overwrite)} files would be overwritten in {output_dir}.{Style.RESET_ALL}")
+        print_section(f"Warning: {len(files_to_overwrite)} files would be overwritten in {output_dir}.")
         print("First 5:")
         for fp in files_to_overwrite[:5]:
             print(f"  - {fp}")
         print("...") if len(files_to_overwrite) > 5 else None
         batch_mode = prompt_with_validation(
-            "\nWhat would you like to do when existing files are found?\n  1. Overwrite all existing files (recommended for most cases).\n  2. Skip all existing files.\n  3. Decide for each file interactively.\n  4. Increment all file names (never overwrite, always create new)",
-            valid_options={'1', '2', '3', '4'},
-            default='1'
+            "What would you like to do when existing files are found?",
+            valid_options=['1. Overwrite all existing files (recommended for most cases).',
+                          '2. Skip all existing files.',
+                          '3. Decide for each file interactively.',
+                          '4. Increment all file names (never overwrite, always create new)'],
+            default='1. Overwrite all existing files (recommended for most cases).'
         )
-        batch_mode = {'1': 'a', '2': 's', '3': 'i', '4': 'increment'}[batch_mode]
+        batch_mode = {'1': 'a', '2': 's', '3': 'i', '4': 'increment'}[batch_mode[0]]
     else:
         batch_mode = 'a'
     overwrite_mode = {'mode': 'all' if batch_mode == 'a' else 'skip' if batch_mode == 's' else 'ask' if batch_mode == 'i' else 'increment'}
@@ -386,32 +735,32 @@ def download_pages_concurrent(pages, output_dir, dry_run=False):
             filename = sanitize_filename(title) + ".txt"
             filename = unique_filename(filename, output_dir, dir_path)
             filepath = os.path.join(output_dir, filename)
-            print(f"{Fore.BLUE}[DRY RUN]{Style.RESET_ALL} Would save: {Fore.GREEN}{filepath}{Style.RESET_ALL}")
+            print(f"[DRY RUN] Would save: {filepath}")
     else:
         with ThreadPoolExecutor(max_workers=10) as executor:
             futures = {executor.submit(save_page, page, output_dir, overwrite_mode): page for page in pages}
             for future in tqdm(as_completed(futures), total=total, desc="Downloading pages"):
                 page = futures[future]
                 try:
-                    if not future.result():
-                        failed.append(page.get('title', 'Untitled'))
+                    with spinner(f"Saving: {page.get('title', 'Untitled')}") as spin:
+                        if not future.result():
+                            failed.append(page.get('title', 'Untitled'))
                 except Exception as e:
-                    print(f"\n{Fore.RED}Error downloading {page.get('title', 'Untitled')}: {e}{Style.RESET_ALL}")
+                    print_section(f"Error downloading {page.get('title', 'Untitled')}: {e}")
                     logging.error(f"Download error for '{page.get('title', 'Untitled')}': {e}")
                     failed.append(page.get('title', 'Untitled'))
         if failed:
-            print(f"\n{Fore.RED}Failed to save {len(failed)} pages:{Style.RESET_ALL}")
+            print_section(f"Failed to save {len(failed)} pages:")
             for title in failed:
                 print(f"  - {title}")
             logging.warning(f"Failed to save {len(failed)} pages: {failed}")
-    print(f"\n{Fore.GREEN}Download complete. {total} pages processed, {len(failed)} errors.{Style.RESET_ALL}")
+    print_section(f"Download complete. {total} pages processed, {len(failed)} errors.")
     logging.info(f"Download complete. {total} pages processed, {len(failed)} errors.")
 
-# === Metrics Report ===
 def write_metrics_md(pages, output_dir, mode, parent_title=None):
-    """Write a Markdown metrics report for the downloaded pages."""
+    """Write a Markdown metrics report for the downloaded pages, with beautified status messages."""
     if not pages:
-        print(f"{Fore.YELLOW}No pages to write metrics for.{Style.RESET_ALL}")
+        print_section("No pages to write metrics for.")
         return
     os.makedirs(output_dir, exist_ok=True)
     metrics_path = os.path.join(output_dir, "metrics.md")
@@ -462,54 +811,17 @@ def write_metrics_md(pages, output_dir, mode, parent_title=None):
                     f"{updated_by}"
                 )
                 f.write(row + "\n")
-        print(f"{Fore.GREEN}Metrics written to {metrics_path}{Style.RESET_ALL}")
+        print_section(f"Metrics written to {metrics_path}")
     except Exception as e:
-        print(f"{Fore.RED}Error writing metrics file: {e}{Style.RESET_ALL}")
+        print_section(f"Error writing metrics file: {e}")
         logging.error(f"Error writing metrics file: {e}")
 
-def get_env_or_prompt(var, prompt, default=None, is_secret=False, stub_values=None):
-    """
-    Get a value from the environment or prompt the user if missing or stubbed.
-    stub_values: list of values that are considered placeholders and should trigger a prompt.
-    """
-    value = os.getenv(var)
-    if value is not None:
-        value = value.strip()
-    if not value or (stub_values and value in stub_values):
-        if is_secret:
-            value = getpass.getpass(f"{prompt}: ").strip()
-        else:
-            if default:
-                value = input(f"{prompt} [default: {default}]: ").strip() or default
-            else:
-                value = input(f"{prompt}: ").strip()
-    return value
-
-def mask_token(token):
-    if not token or len(token) < 8:
-        return '***'
-    return token[:2] + '*' * (len(token) - 6) + token[-4:]
-
 # === Main Script ===
-def main():
-    """Main entry point for the script."""
+if __name__ == "__main__":
+    # Legacy main() call is replaced by the new CLI menu
+    # main()
+    # Setup base_url and auth as in main()
     args = get_args()
-    # Set logging level
-    if args.verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
-        print(f"{Fore.YELLOW}Verbose logging enabled (DEBUG level).{Style.RESET_ALL}")
-    else:
-        logging.getLogger().setLevel(logging.INFO)
-    print(f"{Fore.CYAN}\n==== Confluence Downloader v{__version__} ===={Style.RESET_ALL}")
-    dry_run = args.dry_run
-    if not args.dry_run:
-        print(f"{Fore.MAGENTA}Would you like to run in dry run mode? (Preview actions, no files will be written){Style.RESET_ALL}")
-        dry = input("Dry run? (y/n) [default: n]: ").strip().lower() or 'n'
-        if dry == 'y':
-            dry_run = True
-            print(f"{Fore.MAGENTA}Dry run mode enabled. No files will be written.{Style.RESET_ALL}")
-
-    # Use .env values or prompt as needed
     base_url = args.base_url or get_env_or_prompt(
         'CONFLUENCE_BASE_URL',
         'Confluence base URL',
@@ -518,13 +830,11 @@ def main():
     )
     if not base_url.startswith("http://") and not base_url.startswith("https://"):
         base_url = "https://" + base_url
-
     username = args.username or get_env_or_prompt(
         'CONFLUENCE_USERNAME',
         'Confluence username/email',
         stub_values=['your.email@example.com', '', None]
     )
-    # Warn if API token is passed as a CLI argument (security)
     api_token_cli = getattr(args, 'api_token', None)
     api_token_env = os.getenv('CONFLUENCE_API_TOKEN')
     api_token = get_env_or_prompt(
@@ -533,138 +843,5 @@ def main():
         is_secret=True,
         stub_values=['your-api-token-here', '', None]
     )
-    if api_token_cli:
-        print(f"{Fore.RED}Warning: Passing API token as a command-line argument may expose it in process lists! Use .env or interactive prompt instead.{Style.RESET_ALL}")
     auth = (username, api_token)
-
-    # Print config summary (mask API token)
-    print(f"\n{Fore.CYAN}Configuration:{Style.RESET_ALL}")
-    print(f"  Base URL: {base_url}")
-    print(f"  Username: {username}")
-    print(f"  API Token: {mask_token(api_token)}")
-    print(f"  Output Dir: {args.output_dir or os.getenv('OUTPUT_DIR', 'confluence_pages')}")
-    print(f"  Mode: {args.mode or 'prompt'}")
-    print(f"  Metrics Only: {args.metrics_only}")
-    print(f"  Dry Run: {dry_run}")
-    print(f"  Verbose: {args.verbose}")
-
-    # Page selection
-    if args.mode:
-        mode = args.mode
-    else:
-        print("\nHow would you like to select Confluence pages?")
-        print("  1. Download all pages in an entire space (may be very large).\n")
-        print("  2. Download all pages under a specific parent page (recommended for smaller sets).\n")
-        print("  3. Search and download by page title.\n")
-        while True:
-            mode = input("Enter 1 for entire space, 2 for parent page, or 3 for search by title [default: 2]: ").strip() or '2'
-            if mode in {'1', '2', '3'}:
-                break
-            print(f"{Fore.RED}Invalid selection. Please enter 1, 2, or 3.{Style.RESET_ALL}")
-            logging.warning(f"Invalid mode selection: {mode}")
-
-    output_dir = args.output_dir or get_env_or_prompt(
-        'OUTPUT_DIR',
-        'Output directory',
-        default='confluence_pages',
-        stub_values=['confluence_pages', '', None]
-    )
-
-    print(f"\n{Fore.CYAN}---- Output Options ----{Style.RESET_ALL}")
-    if args.metrics_only:
-        metrics_only = True
-    else:
-        print("\nWhat would you like to do?")
-        print("  1. Generate a metrics report only as a Markdown file.\n")
-        print("  2. Generate a metrics report as a Markdown file AND download all pages as text files.\n")
-        while True:
-            metrics_mode = input("Enter 1 for metrics only, or 2 for metrics and files [default: 2]: ").strip() or '2'
-            if metrics_mode in {'1', '2'}:
-                metrics_only = metrics_mode == '1'
-                break
-            print(f"{Fore.RED}Invalid selection. Please enter 1 or 2.{Style.RESET_ALL}")
-            logging.warning(f"Invalid metrics_mode selection: {metrics_mode}")
-
-    try:
-        if mode == '1':
-            print(f"\n{Fore.YELLOW}WARNING: Downloading an entire Confluence space may take a long time and generate a large number of files.{Style.RESET_ALL}")
-            confirm = input("Are you sure you want to proceed? (y/n) [default: n]: ").strip().lower() or 'n'
-            if confirm != 'y':
-                print(f"{Fore.CYAN}Aborted.{Style.RESET_ALL}")
-                logging.info("User aborted entire space download at confirmation.")
-                return
-            confirm2 = input("Really proceed? (y/n) [default: n]: ").strip().lower() or 'n'
-            if confirm2 != 'y':
-                print(f"{Fore.CYAN}Aborted.{Style.RESET_ALL}")
-                logging.info("User aborted entire space download at double confirmation.")
-                return
-            space_key = args.space_key or input("Enter space key (e.g. DEV): ").strip()
-            print(f"\n{Fore.CYAN}Fetching pages from space '{space_key}'...{Style.RESET_ALL}")
-            pages = get_all_pages_in_space(base_url, auth, space_key)
-            print(f"{Fore.CYAN}Found {len(pages)} pages in space '{space_key}'.{Style.RESET_ALL}")
-            write_metrics_md(pages, output_dir, mode)
-            if not metrics_only:
-                download_pages_concurrent(pages, output_dir, dry_run=dry_run)
-                # Optional: Consolidate markdown files
-                do_consolidate = input("\nWould you like to generate a consolidated Markdown file from all downloaded pages? (y/n) [default: n]: ").strip().lower() or 'n'
-                if do_consolidate == 'y':
-                    consolidate_markdown_files(output_dir)
-            print(f"\n{Fore.GREEN}Summary: {len(pages)} pages processed. Metrics written to {output_dir}/metrics.md{Style.RESET_ALL}")
-        elif mode == '3':
-            search_term = input("Enter title search term: ").strip()
-            pages = search_pages_by_title(base_url, auth, search_term)
-            if not pages:
-                print(f"{Fore.RED}No pages found matching '{search_term}'.{Style.RESET_ALL}")
-                logging.info(f"No pages found for search term: {search_term}")
-                return
-            print(f"{Fore.CYAN}Found {len(pages)} matching pages:{Style.RESET_ALL}")
-            for idx, page in enumerate(pages, 1):
-                print(f"  {idx}. {page.get('title', 'Untitled')} (ID: {page.get('id')})")
-            while True:
-                selection = input("Enter comma-separated numbers to download (or 'all' for all, default: all): ").strip()
-                if not selection or selection.lower() == 'all':
-                    selected_pages = pages
-                    break
-                try:
-                    indices = [int(i)-1 for i in selection.split(',') if i.strip().isdigit()]
-                    if not indices or any(i < 0 or i >= len(pages) for i in indices):
-                        raise ValueError
-                    selected_pages = [pages[i] for i in indices]
-                    break
-                except Exception:
-                    print(f"{Fore.RED}Invalid selection. Please enter valid numbers or 'all'.{Style.RESET_ALL}")
-                    logging.warning(f"Invalid page selection: {selection}")
-            write_metrics_md(selected_pages, output_dir, mode)
-            if not metrics_only:
-                download_pages_concurrent(selected_pages, output_dir, dry_run=dry_run)
-            print(f"\n{Fore.GREEN}Summary: {len(selected_pages)} pages processed. Metrics written to {output_dir}/metrics.md{Style.RESET_ALL}")
-        else:
-            default_parent_url = "https://avetta.atlassian.net/wiki/spaces/it/pages/1122336779"
-            page_url = args.parent_url or input(f"Enter parent page URL [default: {default_parent_url}]: ").strip() or default_parent_url
-            page_id = get_page_id_from_url(page_url, base_url, auth)
-            if not page_id:
-                print(f"{Fore.RED}Could not extract pageId from URL. Please provide a valid Confluence page URL containing pageId.{Style.RESET_ALL}")
-                logging.error(f"Could not extract pageId from URL: {page_url}")
-                return
-            print(f"\n{Fore.CYAN}Fetching pages under parent page...{Style.RESET_ALL}")
-            pages = get_descendants(base_url, auth, page_id)
-            if not pages:
-                print(f"{Fore.RED}\nNo pages could be retrieved. This is usually due to insufficient permissions or a private page.\nPlease check your Confluence permissions, try a different parent page, or contact your Confluence administrator.{Style.RESET_ALL}")
-                logging.warning(f"No pages retrieved for parent page: {page_url}")
-                retry = input("Would you like to try a different parent page or credentials? (y/n) [default: n]: ").strip().lower() or 'n'
-                if retry == 'y':
-                    print(f"{Fore.CYAN}Restart the script and try again with a different page or credentials.{Style.RESET_ALL}")
-                return
-            parent_title = pages[0].get('title') if pages else None
-            print(f"{Fore.CYAN}Found {len(pages)} pages under parent page.{Style.RESET_ALL}")
-            write_metrics_md(pages, output_dir, mode, parent_title)
-            if not metrics_only:
-                download_pages_concurrent(pages, output_dir, dry_run=dry_run)
-            print(f"\n{Fore.GREEN}Summary: {len(pages)} pages processed. Metrics written to {output_dir}/metrics.md{Style.RESET_ALL}")
-    except KeyboardInterrupt:
-        print(f"\n{Fore.YELLOW}Operation cancelled by user. Exiting gracefully.{Style.RESET_ALL}")
-        logging.info("Operation cancelled by user via KeyboardInterrupt.")
-        return
-
-if __name__ == "__main__":
-    main()
+    run_cli_main_menu(base_url, auth)
